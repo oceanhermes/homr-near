@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Applicant {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+  displayName   String
+  kycStatus     String   @default("DEMO")
+  createdAt     DateTime @default(now())
+  applications  Application[]
+}
+
+model Application {
+  id              String   @id @default(cuid())
+  applicantId     String
+  applicant       Applicant @relation(fields: [applicantId], references: [id])
+  propertyHash    String
+  requestedAmount BigInt
+  requestedRate   Int
+  requestedTerm   Int
+  status          String   @default("PENDING")
+  maxPrincipal    BigInt?
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+  approvalTxHash  String?
+  createdAt       DateTime @default(now())
+
+  @@index([status])
+}
+
+model Auction {
+  id                String   @id @default(cuid())
+  onchainAuctionId  BigInt   @unique
+  commitDeadline    DateTime
+  revealDeadline    DateTime
+  status            String   @default("OPEN")
+  createTxHash      String
+  finalizeTxHash    String?
+  createdAt         DateTime @default(now())
+  bids              Bid[]
+}
+
+model Bid {
+  id            String   @id @default(cuid())
+  auctionId     String
+  auction       Auction  @relation(fields: [auctionId], references: [id])
+  applicantId   String
+  commitment    String
+  amount        BigInt?
+  rate          Int?
+  term          Int?
+  revealed      Boolean  @default(false)
+  commitTxHash  String
+  revealTxHash  String?
+  revealedAt    DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([auctionId])
+}
+
+model Loan {
+  id            String   @id @default(cuid())
+  onchainLoanId BigInt   @unique
+  borrower      String
+  principal     BigInt
+  rate          Int
+  term          Int
+  maturity      DateTime
+  propertyHash  String
+  status        String   @default("ACTIVE")
+  createTxHash  String
+  createdAt     DateTime @default(now())
+  repayments    Repayment[]
+
+  @@index([status])
+}
+
+model Repayment {
+  id            String   @id @default(cuid())
+  loanId        String
+  loan          Loan     @relation(fields: [loanId], references: [id])
+  amount        BigInt
+  txHash        String
+  blockNumber   BigInt
+  paidAt        DateTime
+
+  @@index([loanId])
+}
+
+model ChainEvent {
+  id          String   @id @default(cuid())
+  txHash      String
+  blockNumber BigInt
+  logIndex    Int
+  eventName   String
+  payload     Json
+  createdAt   DateTime @default(now())
+
+  @@unique([txHash, logIndex])
+  @@index([eventName])
+}
+
+model IndexerCursor {
+  id        String   @id @default("singleton")
+  lastBlock BigInt
+  updatedAt DateTime @updatedAt
+}

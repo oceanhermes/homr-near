@@ -1,0 +1,51 @@
+HOMR deployment repair
+
+The API and faucet are separate services. Deploying frontend/ to Vercel does not
+restart either VPS service.
+
+API (api/ on VPS):
+1. Update source to this version.
+2. Keep the existing secrets in api/.env. Set:
+   CORS_ORIGIN=https://homr.web.id,https://www.homr.web.id
+3. Run npm ci, npm run prisma:generate, npm run build, and npm test.
+4. Restart the existing API process using its current process manager.
+   Do not start a second API on port 4000.
+
+Frontend (Vercel root directory: frontend):
+VITE_API_BASE=https://api.homr.web.id
+VITE_FAUCET_API_BASE=https://api.homr.web.id/faucet
+Redeploy after changing build environment variables.
+
+Faucet (backend/faucet/ on VPS):
+1. Configure backend/faucet/.env using .env.example. Keep FAUCET_PRIVATE_KEY
+   on the VPS. Use a dedicated funded BNB Testnet wallet.
+2. Set FAUCET_ALLOWED_ORIGINS=https://homr.web.id,https://www.homr.web.id
+3. Run npm ci and npm test, then start/restart one faucet process on port 3001.
+   Use PM2 fork mode with instances=1, not cluster mode. The wallet transaction
+   queue and claim state writer require one process. Do not share its wallet
+   with another transaction sender.
+   Preserve backend/faucet/data/ across deploys, or set FAUCET_STATE_FILE to
+   an absolute path on a persistent writable volume. Back up that file.
+   FAUCET_MAX_CLAIMS_PER_HOUR defaults to 60 total claims across both tokens.
+   A broadcast/confirmation failure retains the one-hour reservation to avoid
+   paying twice when a transaction's result is uncertain.
+4. Include deploy/nginx-faucet.conf inside the existing api.homr.web.id HTTPS
+   server block. Validate with nginx -t before reloading Nginx.
+
+For the VPS using Cloudflare Tunnel directly (without the Nginx API proxy),
+add this ingress rule BEFORE the existing api.homr.web.id rule:
+  - hostname: api.homr.web.id
+    path: ^/faucet/.*$
+    service: http://127.0.0.1:3001
+The faucet accepts the /faucet/api/... paths without URL rewriting.
+Validate with cloudflared tunnel ingress validate before restarting cloudflared.
+deploy/homr-faucet.service is the systemd unit for /opt/horm/backend/faucet.
+Store its dedicated wallet configuration in /etc/homr-faucet.env (mode 0600).
+An unfunded faucet returns HTTP 503 until its wallet receives testnet BNB.
+
+Verify from the repository root:
+node deploy/production-check.mjs
+
+The check only reads data and sends OPTIONS preflights. It does not create
+applications, review requests, claim tokens, or send blockchain transactions.
+Onchain write flows are covered by the local contract integration tests.

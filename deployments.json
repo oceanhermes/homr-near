@@ -1,0 +1,14 @@
+{
+  "network": "tbnb",
+  "chainId": 97,
+  "rpcUrl": "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
+  "deployBlock": 132821935,
+  "deployer": "0xEDCBD7A4A4935eC62730b18f6E2616d615cA3d6c",
+  "contracts": {
+    "MockUSDC": "0x68F7aAbB357cEF15F8245468f4b66619Bbba051a",
+    "HousingCreditVault": "0xDab816f3B857084e2dA394e4ef142FF680671525",
+    "LoanManager": "0xDb2aceAd65bF79bf304d97979ea14cbc4e74dfab",
+    "CreditAuction": "0x99123ADC1dc2594b94ca02A65F553E5c1d0fC4c5"
+  },
+  "deployedAt": "2026-09-24T02:26:37.508Z"
+}

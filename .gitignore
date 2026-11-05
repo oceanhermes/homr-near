@@ -1,0 +1,68 @@
+# ============================================
+# Dependencies
+# ============================================
+node_modules/
+
+# ============================================
+# Build output
+# ============================================
+dist/
+build/
+*.log
+
+# Hardhat
+artifacts/
+cache/
+backend/artifacts/
+backend/cache/
+backend/typechain-types/
+near/target/
+
+# Next.js
+.next/
+out/
+
+# ============================================
+# Environment & secrets — JANGAN PERNAH COMMIT
+# ============================================
+.env
+.env.*
+!.env.example
+env_api
+env_api.*
+api.env
+api.env.*
+*.key
+*.pem
+*.p12
+secrets.json
+
+# ============================================
+# Database lokal
+# ============================================
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ============================================
+# IDE / OS
+# ============================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ============================================
+# Misc
+# ============================================
+coverage/
+.cache/
+backend/faucet/.env
+backend/faucet/data/
+
+# Local Markdown documentation
+*.[mM][dD]
+!README.md
+!near/README.md
