@@ -1,0 +1,21 @@
+[package]
+name = "homr-near-registry"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+near-sdk = "5.17.2"
+
+[dev-dependencies]
+near-sdk = { version = "5.17.2", features = ["unit-testing"] }
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+strip = "symbols"

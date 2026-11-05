@@ -1,0 +1,29 @@
+[Unit]
+Description=HOMR BNB Testnet faucet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homr-faucet
+Group=homr-faucet
+WorkingDirectory=/opt/horm/backend/faucet
+EnvironmentFile=/etc/homr-faucet.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3001
+Environment=FAUCET_STATE_FILE=/var/lib/homr-faucet/claims.json
+ExecStart=/usr/bin/node /opt/horm/backend/faucet/server.js
+Restart=on-failure
+RestartSec=5
+StateDirectory=homr-faucet
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/homr-faucet
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,191 @@
+.risk-globe-section {
+  width: 100%;
+  max-width: 1264px;
+  margin: 0 auto;
+  padding: 32px 32px 80px;
+  scroll-margin-top: 100px;
+}
+
+.risk-globe-panel {
+  position: relative;
+  isolation: isolate;
+  min-height: 520px;
+  overflow: clip;
+  border: 1px solid var(--divider);
+  border-radius: var(--rounded-lg);
+  background: #151419;
+}
+
+.risk-globe-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 690px;
+  padding: 56px;
+}
+
+.risk-globe-copy h2 {
+  margin: 0;
+  max-width: 580px;
+  font-size: clamp(36px, 4.5vw, 60px);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -1.6px;
+  text-wrap: balance;
+  color: var(--on-dark);
+}
+
+.risk-globe-body {
+  max-width: 480px;
+  margin: 28px 0 32px;
+  color: #c4c0cc;
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+.risk-globe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.risk-globe-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  padding: 12px 18px;
+  border-radius: var(--rounded-sm);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.risk-globe-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+  border: 1px solid var(--primary);
+}
+
+.risk-globe-primary:hover {
+  background: var(--primary-hover);
+}
+
+.risk-globe-secondary {
+  background: #201e26;
+  color: var(--on-dark);
+  border: 1px solid #595360;
+}
+
+.risk-globe-secondary:hover {
+  background: #302c39;
+  border-color: var(--primary);
+}
+
+.risk-globe-visual {
+  position: absolute;
+  z-index: -1;
+  right: -190px;
+  bottom: -270px;
+  width: 820px;
+  height: 820px;
+  pointer-events: none;
+  mask-image: linear-gradient(to right, transparent 4%, #000 48%);
+}
+
+.risk-globe-visual > div:not(.globe-static) {
+  position: absolute !important;
+  inset: 0;
+}
+
+.globe-static {
+  position: absolute;
+  inset: 14%;
+  border-radius: 50%;
+  background: #252735 url('/textures/earth-blue-marble.jpg') 65% center / auto 100%;
+  box-shadow: inset 36px -24px 70px #000c, inset -6px 6px 18px #cbb7fb50;
+}
+
+.risk-globe-pause {
+  position: absolute;
+  z-index: 3;
+  right: 24px;
+  bottom: 20px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid #595360;
+  border-radius: var(--rounded-sm);
+  background: #151419;
+  color: #e2d9ee;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.risk-globe-pause:hover {
+  border-color: var(--primary);
+}
+
+.risk-globe-actions a:focus-visible,
+.risk-globe-pause:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+}
+
+@media (max-width: 900px) {
+  .risk-globe-section {
+    padding: 24px 20px 64px;
+  }
+
+  .risk-globe-copy {
+    max-width: 610px;
+    padding: 40px;
+  }
+
+  .risk-globe-panel {
+    min-height: 660px;
+  }
+
+  .risk-globe-visual {
+    right: -200px;
+    bottom: -350px;
+    mask-image: linear-gradient(to bottom, transparent 5%, #000 42%);
+  }
+}
+
+@media (max-width: 540px) {
+  .risk-globe-copy {
+    padding: 28px 24px;
+  }
+
+  .risk-globe-copy h2 {
+    font-size: 36px;
+    letter-spacing: -1px;
+  }
+
+  .risk-globe-body {
+    font-size: 16px;
+    margin: 24px 0;
+  }
+
+  .risk-globe-panel {
+    min-height: 740px;
+    padding-bottom: 260px;
+  }
+
+  .risk-globe-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .risk-globe-visual {
+    width: 660px;
+    height: 660px;
+    right: -220px;
+    bottom: -250px;
+  }
+
+  .risk-globe-pause {
+    right: 16px;
+    bottom: 16px;
+  }
+}

@@ -1,0 +1,121 @@
+.border-glow-card {
+  --edge-proximity: 0;
+  --cursor-angle: 45deg;
+  --color-sensitivity: calc(var(--edge-sensitivity) + 20);
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  min-width: 0;
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: var(--border-radius);
+  background: var(--card-bg);
+}
+
+.border-glow-card::before,
+.border-glow-card::after,
+.border-glow-card > .edge-light {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  transition: opacity 250ms ease-out;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.border-glow-card:not(:hover):not(:focus-within):not(.sweep-active)::before,
+.border-glow-card:not(:hover):not(:focus-within):not(.sweep-active)::after,
+.border-glow-card:not(:hover):not(:focus-within):not(.sweep-active) > .edge-light {
+  opacity: 0;
+  transition-duration: 500ms;
+}
+
+.border-glow-card::before {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--card-bg) 0 100%) padding-box,
+    var(--gradient-0) border-box, var(--gradient-1) border-box,
+    var(--gradient-2) border-box, var(--gradient-3) border-box,
+    var(--gradient-4) border-box, var(--gradient-5) border-box,
+    var(--gradient-6) border-box, var(--gradient-base) border-box;
+  opacity: clamp(0, calc((var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity))), 1);
+  mask-image: conic-gradient(from var(--cursor-angle) at center,
+    black calc(var(--cone-spread) * 1%),
+    transparent calc((var(--cone-spread) + 15) * 1%),
+    transparent calc((100 - var(--cone-spread) - 15) * 1%),
+    black calc((100 - var(--cone-spread)) * 1%));
+}
+
+.border-glow-card::after {
+  border: 1px solid transparent;
+  background:
+    var(--gradient-0) padding-box, var(--gradient-1) padding-box,
+    var(--gradient-2) padding-box, var(--gradient-3) padding-box,
+    var(--gradient-4) padding-box, var(--gradient-5) padding-box,
+    var(--gradient-6) padding-box, var(--gradient-base) padding-box;
+  mask-image:
+    linear-gradient(black, black),
+    radial-gradient(ellipse at 50% 50%, black 40%, transparent 65%),
+    radial-gradient(ellipse at 66% 66%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 66% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 66%, black 5%, transparent 40%),
+    conic-gradient(from var(--cursor-angle) at center, transparent 5%, black 15%, black 85%, transparent 95%);
+  mask-composite: subtract, add, add, add, add, add;
+  opacity: clamp(0, calc(var(--fill-opacity) * (var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity))), 1);
+  mix-blend-mode: soft-light;
+}
+
+.border-glow-card > .edge-light {
+  inset: calc(var(--glow-padding) * -1);
+  z-index: 2;
+  mask-image: conic-gradient(from var(--cursor-angle) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%);
+  opacity: clamp(0, calc((var(--edge-proximity) - var(--edge-sensitivity)) / (100 - var(--edge-sensitivity))), 1);
+  mix-blend-mode: plus-lighter;
+}
+
+.border-glow-card > .edge-light::before {
+  content: '';
+  position: absolute;
+  inset: var(--glow-padding);
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px var(--glow-color),
+    inset 0 0 1px var(--glow-color-60),
+    inset 0 0 3px var(--glow-color-50),
+    inset 0 0 6px var(--glow-color-40),
+    inset 0 0 15px var(--glow-color-30),
+    inset 0 0 25px 2px var(--glow-color-20),
+    inset 0 0 50px 2px var(--glow-color-10),
+    0 0 1px var(--glow-color-60),
+    0 0 3px var(--glow-color-50),
+    0 0 6px var(--glow-color-40),
+    0 0 15px var(--glow-color-30),
+    0 0 25px 2px var(--glow-color-20),
+    0 0 50px 2px var(--glow-color-10);
+}
+
+.border-glow-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: inherit;
+}
+
+.border-glow-card:focus-within {
+  border-color: var(--primary);
+}
+
+.border-glow-card:focus-within > .edge-light {
+  opacity: 0.65;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .border-glow-card::before,
+  .border-glow-card::after,
+  .border-glow-card > .edge-light {
+    transition: none;
+  }
+}
