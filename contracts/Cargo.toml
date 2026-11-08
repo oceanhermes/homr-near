@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "common",
+    "audit_registry",
+    "credit_auction",
+    "housing_vault",
+    "loan_manager",
+    "mock_token",
+]
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true
+strip = "symbols"
+

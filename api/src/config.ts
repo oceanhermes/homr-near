@@ -7,22 +7,31 @@ const schema = z.object({
     LOG_LEVEL: z.string().default("info"),
     DATABASE_URL: z.string().url(),
 
-    CHAIN_ID: z.coerce.number().int().positive(),
-    NETWORK_NAME: z.string().default("BNB Smart Chain Testnet"),
-    NATIVE_CURRENCY_NAME: z.string().default("tBNB"),
-    NATIVE_CURRENCY_SYMBOL: z.string().default("tBNB"),
-    EXPLORER_NAME: z.string().default("Block Explorer"),
-    RPC_URL: z.string().url(),
-    EXPLORER_URL: z.string().url(),
+    // NEAR Network Configuration
+    NEAR_NETWORK_ID: z.string().default("testnet"),
+    NEAR_NODE_URL: z.string().url().default("https://rpc.testnet.near.org"),
+    NEAR_ARCHIVAL_URL: z.string().url().default("https://archival-rpc.testnet.near.org"),
+    NEAR_EXPLORER_URL: z.string().url().default("https://testnet.nearblocks.io"),
 
-    VAULT_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-    AUCTION_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-    LOAN_MANAGER_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-    MOCK_USDC_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-    DEPLOY_BLOCK: z.coerce.bigint(),
+    // Contract Account IDs
+    VAULT_CONTRACT: z.string().default("vault.homr.testnet"),
+    AUCTION_CONTRACT: z.string().default("auction.homr.testnet"),
+    LOAN_MANAGER_CONTRACT: z.string().default("loan-manager.homr.testnet"),
+    AUDIT_CONTRACT: z.string().default("audit.homr.testnet"),
+    TOKEN_CONTRACT: z.string().default("token.homr.testnet"),
 
-    ADMIN_PRIVATE_KEY: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
-    ADMIN_API_KEY: z.string().min(8),
+    // Admin Credentials
+    ADMIN_ACCOUNT_ID: z.string().default("admin.homr.testnet"),
+    ADMIN_PRIVATE_KEY: z.string().default("ed25519:3D5NzVDzVbZ1F7bZ1F7bZ1F7bZ1F7bZ1F7bZ1F7bZ1F7"),
+    ADMIN_API_KEY: z.string().min(8).default("homr_admin_secret_key_2026"),
+
+    // Demo Signer (for Walletless Demo)
+    DEMO_SIGNER_ACCOUNT_ID: z.string().optional(),
+    DEMO_SIGNER_PRIVATE_KEY: z.string().optional(),
+
+    // Indexer Configuration
+    FINALITY_LAG: z.coerce.number().int().nonnegative().default(5),
+    INDEXER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(10000),
 
     CORS_ORIGIN: z.string().default("http://localhost:3000,http://localhost:5173"),
 });
@@ -36,10 +45,11 @@ if (!parsed.success) {
 export const config = {
     ...parsed.data,
     isProd: parsed.data.NODE_ENV === "production",
-    addresses: {
-        vault: parsed.data.VAULT_ADDRESS as `0x${string}`,
-        auction: parsed.data.AUCTION_ADDRESS as `0x${string}`,
-        loanManager: parsed.data.LOAN_MANAGER_ADDRESS as `0x${string}`,
-        mockUsdc: parsed.data.MOCK_USDC_ADDRESS as `0x${string}`,
+    contracts: {
+        vault: parsed.data.VAULT_CONTRACT,
+        auction: parsed.data.AUCTION_CONTRACT,
+        loanManager: parsed.data.LOAN_MANAGER_CONTRACT,
+        audit: parsed.data.AUDIT_CONTRACT,
+        token: parsed.data.TOKEN_CONTRACT,
     },
 };

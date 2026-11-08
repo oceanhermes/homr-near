@@ -9,7 +9,8 @@ export async function applicationRoutes(app: FastifyInstance) {
     // Public: borrower submit application
     app.post("/applications", async (req, reply) => {
         const body = req.body as {
-            walletAddress: string;
+            walletAddress?: string;
+            accountId?: string;
             displayName: string;
             propertyHash: string;
             requestedAmount: string;
@@ -17,13 +18,17 @@ export async function applicationRoutes(app: FastifyInstance) {
             requestedTerm: number;
         };
 
-        if (!body?.walletAddress || !body?.propertyHash) {
-            return reply.code(400).send({ error: "walletAddress and propertyHash required" });
+        const identifier = body?.accountId || body?.walletAddress;
+        if (!identifier || !body?.propertyHash) {
+            return reply.code(400).send({ error: "accountId (or walletAddress) and propertyHash required" });
         }
 
         try {
-            const app = await createApplication(body);
-            return reply.code(201).send(app);
+            const result = await createApplication({
+                ...body,
+                accountId: identifier,
+            });
+            return reply.code(201).send(result);
         } catch (err) {
             app.log.error(err);
             return reply.code(500).send({ error: "create_failed", message: (err as Error).message });

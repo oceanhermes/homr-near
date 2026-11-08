@@ -1,24 +1,24 @@
 import { prisma } from "../../db/client.js";
-import { approveBorrower } from "../../chain/signer.js";
-import { publicClient, abis } from "../../chain/contracts.js";
-import { config } from "../../config.js";
-import { applicationAmountToToken } from "./units.js";
+import { approveBorrower } from "../../chain/nearSigner.js";
 
 export interface CreateApplicationInput {
-    walletAddress: string;
+    walletAddress?: string;    // Accepted for backwards compat
+    accountId?: string;        // NEAR accountId
     displayName: string;
     propertyHash: string;
     requestedAmount: string;   // bigint string
     requestedRate: number;     // basis points
-    requestedTerm: number;     // detik
+    requestedTerm: number;     // detik / hari
 }
 
 export async function createApplication(input: CreateApplicationInput) {
+    const account = (input.accountId || input.walletAddress || "borrower.testnet").toLowerCase();
+
     // Upsert applicant
     const applicant = await prisma.applicant.upsert({
-        where: { walletAddress: input.walletAddress.toLowerCase() },
+        where: { accountId: account },
         create: {
-            walletAddress: input.walletAddress.toLowerCase(),
+            accountId: account,
             displayName: input.displayName,
             kycStatus: "DEMO",
         },
@@ -75,7 +75,6 @@ export async function reviewApplication(id: string, input: ReviewInput) {
         throw new Error("APPLICATION_ALREADY_REVIEWED");
     }
 
-    // REJECTED → simpan saja, tidak panggil kontrak
     if (input.decision === "REJECTED") {
         return prisma.application.update({
             where: { id },
@@ -88,20 +87,13 @@ export async function reviewApplication(id: string, input: ReviewInput) {
         });
     }
 
-    // APPROVED → panggil kontrak approveBorrower
     if (!input.maxPrincipal) {
         throw new Error("MAX_PRINCIPAL_REQUIRED");
     }
 
-    const tokenDecimals = await publicClient.readContract({
-        address: config.addresses.mockUsdc,
-        abi: abis.mockUsdc,
-        functionName: "decimals",
-    }) as number;
-
     const tx = await approveBorrower(
-        application.applicant.walletAddress as `0x${string}`,
-        applicationAmountToToken(BigInt(input.maxPrincipal), tokenDecimals),
+        application.applicant.accountId,
+        BigInt(input.maxPrincipal),
         application.propertyHash
     );
 
@@ -115,21 +107,7 @@ export async function reviewApplication(id: string, input: ReviewInput) {
             reviewNote: input.reviewNote,
             approvalTxHash: tx.txHash,
         },
-        select: {
-            id: true,
-            applicantId: true,
-            propertyHash: true,
-            requestedAmount: true,
-            requestedRate: true,
-            requestedTerm: true,
-            status: true,
-            maxPrincipal: true,
-            reviewedBy: true,
-            reviewedAt: true,
-            reviewNote: true,
-            approvalTxHash: true,
-            createdAt: true,
-        },
+        include: { applicant: true },
     });
 
     return {

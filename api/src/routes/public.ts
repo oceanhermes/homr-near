@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { getVaultState } from "../chain/contracts.js";
+import { getVaultState } from "../chain/nearRpc.js";
 import { config } from "../config.js";
 import { prisma } from "../db/client.js";
 
@@ -8,9 +8,9 @@ export async function publicRoutes(app: FastifyInstance) {
         const state = await getVaultState();
         return {
             ...state,
-            chainId: config.CHAIN_ID,
-            vaultAddress: config.addresses.vault,
-            explorerUrl: `${config.EXPLORER_URL}/address/${config.addresses.vault}`,
+            networkId: config.NEAR_NETWORK_ID,
+            vaultContract: config.contracts.vault,
+            explorerUrl: `${config.NEAR_EXPLORER_URL}/address/${config.contracts.vault}`,
         };
     });
 
@@ -38,12 +38,12 @@ export async function publicRoutes(app: FastifyInstance) {
         if (Number.isNaN(n) || n < 1) {
             return reply.code(400).send({
                 error: "invalid_limit",
-                message: "limit harus angka >= 1",
+                message: "limit must be a number >= 1",
             });
         }
         const take = Math.min(Math.floor(n), 200);
         const events = await prisma.chainEvent.findMany({
-            orderBy: { blockNumber: "desc" },
+            orderBy: { blockHeight: "desc" },
             take,
         });
         return { events };

@@ -1,52 +1,76 @@
-import React from 'react';
-import { defineChain } from 'viem';
-import { createConfig, http, WagmiProvider } from 'wagmi';
-import { bscTestnet, localhost } from 'wagmi/chains';
-import { injected } from 'wagmi/connectors';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { CHAIN_CONFIG } from '../contracts/addresses';
+import { NEAR_CONFIG, CHAIN_CONFIG } from '../contracts/addresses';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1
-    }
-  }
+      retry: 1,
+    },
+  },
 });
 
-const auroraTestnet = defineChain({
-  id: 1313161555,
-  name: 'Aurora Testnet',
-  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: ['https://testnet.aurora.dev'] } },
-  blockExplorers: { default: { name: 'AuroraScan', url: 'https://testnet.aurorascan.dev' } },
+export const NearWalletContext = createContext({
+  account: null,
+  address: null,
+  isConnected: false,
+  connect: () => {},
+  disconnect: () => {},
+  network: NEAR_CONFIG.networkId,
 });
 
-const chain = CHAIN_CONFIG.chainId === 31337
-  ? { ...localhost, id: 31337 }
-  : CHAIN_CONFIG.chainId === 1313161555
-    ? auroraTestnet
-    : bscTestnet;
-if (![97, 1313161555, 31337].includes(CHAIN_CONFIG.chainId)) {
-  throw new Error('Supported chains: BNB Testnet (97), Aurora Testnet (1313161555), and local development (31337).');
+export function useAccount() {
+  const { account, isConnected } = useContext(NearWalletContext);
+  return {
+    address: account,
+    account,
+    isConnected,
+    chain: { id: CHAIN_CONFIG.chainId, name: CHAIN_CONFIG.chainName },
+  };
 }
 
-const config = createConfig({
-  chains: [chain],
-  connectors: [injected()],
-  transports: {
-    [chain.id]: http(CHAIN_CONFIG.rpcUrl, { timeout: 15000, retryCount: 1 })
-  }
-});
+export function useConnect() {
+  const { connect } = useContext(NearWalletContext);
+  return { connect, connectors: [{ id: 'my-near-wallet', name: 'MyNearWallet' }] };
+}
+
+export function useDisconnect() {
+  const { disconnect } = useContext(NearWalletContext);
+  return { disconnect };
+}
 
 export function Web3Provider({ children }) {
+  const [account, setAccount] = useState(() => {
+    return localStorage.getItem('homr_near_account') || null;
+  });
+
+  const connect = (accountId) => {
+    const acc = typeof accountId === 'string' && accountId ? accountId : 'investor.homr.testnet';
+    setAccount(acc);
+    localStorage.setItem('homr_near_account', acc);
+  };
+
+  const disconnect = () => {
+    setAccount(null);
+    localStorage.removeItem('homr_near_account');
+  };
+
+  const value = {
+    account,
+    address: account,
+    isConnected: Boolean(account),
+    connect,
+    disconnect,
+    network: NEAR_CONFIG.networkId,
+  };
+
   return (
-    <WagmiProvider config={config}>
+    <NearWalletContext.Provider value={value}>
       <QueryClientProvider client={queryClient}>
         {children}
       </QueryClientProvider>
-    </WagmiProvider>
+    </NearWalletContext.Provider>
   );
 }
 
