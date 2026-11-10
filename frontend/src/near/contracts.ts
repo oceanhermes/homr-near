@@ -206,9 +206,10 @@ async function callMany(
  * Deposit underlying tokens: NEP-141 `ft_transfer_call` → vault `ft_on_transfer`,
  * which mints hvSHARE at the booked NAV.
  *
- * The vault's `ft_on_transfer` refunds unless it receives >= 1 NEAR of attached
- * deposit, so the token contract must forward the storage deposit. See the STEP 5
- * report for the integration caveat.
+ * `mock_token::ft_transfer_call` forwards the attached deposit to
+ * `ft_on_transfer`, and the vault only registers a deposit when it receives at
+ * least 1 NEAR, so the storage deposit rides along with the transfer. The vault
+ * refunds the token amount (not the NEAR) when storage is not registered.
  */
 export function deposit(signer: NearSigner, amount: Numeric): Promise<SignedTransaction> {
   return call(
@@ -220,7 +221,7 @@ export function deposit(signer: NearSigner, amount: Numeric): Promise<SignedTran
       amount: toRaw(amount),
       msg: '',
     },
-    { gas: GAS.ftTransferCall, deposit: ONE_YOCTO }
+    { gas: GAS.ftTransferCall, deposit: STORAGE_DEPOSIT }
   );
 }
 
@@ -251,36 +252,14 @@ export function approveBorrower(
   });
 }
 
+/** `create_auction` opens the auction and starts the commit phase in one call. */
 export function createAuction(
   signer: NearSigner,
-  input: { commitDurationSeconds: Numeric; revealDurationSeconds: Numeric; auctionId: Numeric }
+  input: { commitDurationSeconds: Numeric; revealDurationSeconds: Numeric }
 ): Promise<SignedTransaction> {
-  const auctionId = Number(input.auctionId);
-  // `create_auction` leaves the auction in Draft; it must be opened and then
-  // moved into the commit phase. All three calls are issued atomically in one
-  // wallet approval, in declaration order.
-  return callMany(signer, CONTRACT_ADDRESSES.CreditAuction, [
-    {
-      methodName: 'create_auction',
-      args: {
-        commit_duration_ms: Number(input.commitDurationSeconds) * 1000,
-        reveal_duration_ms: Number(input.revealDurationSeconds) * 1000,
-      },
-    },
-    { methodName: 'open_auction', args: { auction_id: auctionId } },
-    { methodName: 'start_commit_phase', args: { auction_id: auctionId } },
-  ]);
-}
-
-export function openAuction(signer: NearSigner, auctionId: Numeric): Promise<SignedTransaction> {
-  return call(signer, CONTRACT_ADDRESSES.CreditAuction, 'open_auction', {
-    auction_id: Number(auctionId),
-  });
-}
-
-export function startCommitPhase(signer: NearSigner, auctionId: Numeric): Promise<SignedTransaction> {
-  return call(signer, CONTRACT_ADDRESSES.CreditAuction, 'start_commit_phase', {
-    auction_id: Number(auctionId),
+  return call(signer, CONTRACT_ADDRESSES.CreditAuction, 'create_auction', {
+    commit_duration_ms: Number(input.commitDurationSeconds) * 1000,
+    reveal_duration_ms: Number(input.revealDurationSeconds) * 1000,
   });
 }
 

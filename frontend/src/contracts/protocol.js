@@ -308,14 +308,12 @@ function actions(account, signer, onProgress = () => {}) {
     },
 
     async startAuction(commitDuration, revealDuration) {
-      return run('the new auction cycle', async () => {
-        const nextId = Number(await view(CONTRACT_ADDRESSES.CreditAuction, 'get_next_auction_id') || 1);
-        return createAuctionAction(signer, {
+      return run('the new auction cycle', () =>
+        createAuctionAction(signer, {
           commitDurationSeconds: commitDuration,
           revealDurationSeconds: revealDuration,
-          auctionId: nextId,
-        });
-      });
+        })
+      );
     },
 
     async finalizeAuction() {

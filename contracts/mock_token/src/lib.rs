@@ -82,6 +82,13 @@ impl MockFungibleToken {
         self.internal_transfer(&sender, &receiver_id, amount.0, memo);
     }
 
+    /// NEP-141 `ft_transfer_call`.
+    ///
+    /// The attached deposit is forwarded to the receiver's `ft_on_transfer` so
+    /// receivers that require a storage deposit can be funded in the same call
+    /// (`housing_vault::ft_on_transfer` needs at least 1 NEAR to register the
+    /// deposit, otherwise it refunds). Callers must attach the receiver's storage
+    /// deposit; the token contract keeps nothing.
     #[payable]
     pub fn ft_transfer_call(
         &mut self,
@@ -90,12 +97,18 @@ impl MockFungibleToken {
         memo: Option<String>,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        assert_one_yocto();
+        let storage_deposit = env::attached_deposit();
+        require!(
+            storage_deposit.as_yoctonear() > 0,
+            "attach the receiver storage deposit (>= 1 NEAR for the housing vault)"
+        );
+
         let sender = env::predecessor_account_id();
         self.internal_transfer(&sender, &receiver_id, amount.0, memo);
 
         ext_ft_receiver::ext(receiver_id.clone())
             .with_static_gas(GAS_FOR_FT_TRANSFER_CALL)
+            .with_attached_deposit(storage_deposit)
             .ft_on_transfer(sender.clone(), amount, msg)
             .then(
                 ext_self::ext(env::current_account_id())
@@ -192,3 +205,69 @@ impl MockFungibleToken {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use near_sdk::test_utils::VMContextBuilder;
+    use near_sdk::testing_env;
+    use near_sdk::NearToken;
+
+    fn token() -> MockFungibleToken {
+        let owner: AccountId = "owner.testnet".parse().unwrap();
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(owner)
+            .build());
+        MockFungibleToken::new(None)
+    }
+
+    #[test]
+    fn ft_transfer_call_forwards_the_attached_storage_deposit() {
+        let mut t = token();
+        let holder: AccountId = "investor.testnet".parse().unwrap();
+        let vault: AccountId = "vault.testnet".parse().unwrap();
+        t.mint(holder.clone(), U128(100_000));
+
+        // The vault-side storage deposit rides along with the transfer.
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(holder.clone())
+            .attached_deposit(NearToken::from_near(1))
+            .build());
+        let result = t.ft_transfer_call(vault.clone(), U128(100_000), None, "".into());
+
+        assert!(matches!(result, PromiseOrValue::Promise(_)));
+        assert_eq!(t.ft_balance_of(holder), U128(0));
+        assert_eq!(t.ft_balance_of(vault), U128(100_000));
+    }
+
+    #[test]
+    #[should_panic(expected = "attach the receiver storage deposit")]
+    fn ft_transfer_call_requires_an_attached_deposit() {
+        let mut t = token();
+        let holder: AccountId = "investor.testnet".parse().unwrap();
+        let vault: AccountId = "vault.testnet".parse().unwrap();
+        t.mint(holder.clone(), U128(100_000));
+
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(holder)
+            .attached_deposit(NearToken::from_yoctonear(0))
+            .build());
+        t.ft_transfer_call(vault, U128(100_000), None, "".into());
+    }
+
+    #[test]
+    fn ft_transfer_still_requires_one_yocto() {
+        let mut t = token();
+        let holder: AccountId = "investor.testnet".parse().unwrap();
+        let other: AccountId = "bob.testnet".parse().unwrap();
+        t.mint(holder.clone(), U128(10));
+
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(holder.clone())
+            .attached_deposit(NearToken::from_yoctonear(1))
+            .build());
+        t.ft_transfer(other.clone(), U128(10), None);
+
+        assert_eq!(t.ft_balance_of(holder), U128(0));
+        assert_eq!(t.ft_balance_of(other), U128(10));
+    }
+}

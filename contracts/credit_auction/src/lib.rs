@@ -153,6 +153,10 @@ impl HomrCreditAuction {
         );
     }
 
+    /// Create an auction and immediately enter the commit phase.
+    ///
+    /// The commit deadline starts now, so no separate `open_auction` /
+    /// `start_commit_phase` round-trips are needed.
     pub fn create_auction(&mut self, commit_duration_ms: u64, reveal_duration_ms: u64) -> u64 {
         self.assert_auction_manager();
         require!(commit_duration_ms > 0, "commit duration must be > 0");
@@ -169,7 +173,7 @@ impl HomrCreditAuction {
             id: auction_id,
             commit_deadline,
             reveal_deadline,
-            state: AuctionState::Draft,
+            state: AuctionState::Commit,
             best_bid: None,
             created_at: now,
         };
@@ -186,40 +190,17 @@ impl HomrCreditAuction {
             }),
         );
 
-        auction_id
-    }
-
-    /// Transition from Draft -> Open
-    pub fn open_auction(&mut self, auction_id: u64) {
-        self.assert_auction_manager();
-        let auction = self.auctions.get_mut(&auction_id).expect("auction not found");
-        require!(auction.state == AuctionState::Draft, "auction not in Draft state");
-        auction.state = AuctionState::Open;
-
-        emit_event(
-            "homr_auction",
-            "1.0.0",
-            "auction_opened",
-            serde_json::json!({ "auction_id": auction_id }),
-        );
-    }
-
-    /// Transition from Open -> Commit (starts commit phase)
-    pub fn start_commit_phase(&mut self, auction_id: u64) {
-        self.assert_auction_manager();
-        let auction = self.auctions.get_mut(&auction_id).expect("auction not found");
-        require!(auction.state == AuctionState::Open, "auction not in Open state");
-        auction.state = AuctionState::Commit;
-
         emit_event(
             "homr_auction",
             "1.0.0",
             "commit_phase_started",
             serde_json::json!({
                 "auction_id": auction_id,
-                "commit_deadline": auction.commit_deadline,
+                "commit_deadline": commit_deadline,
             }),
         );
+
+        auction_id
     }
 
     #[payable]
@@ -529,16 +510,8 @@ mod tests {
         // Approve borrower
         c.approve_borrower(borrower.clone(), U128(100_000), "prop-hash-1".into());
 
-        // Create auction (Draft)
+        // Create auction (enters Commit immediately)
         let auction_id = c.create_auction(10_000, 10_000);
-        assert_eq!(c.get_auction(auction_id).unwrap().state, AuctionState::Draft);
-
-        // Open auction (Draft -> Open)
-        c.open_auction(auction_id);
-        assert_eq!(c.get_auction(auction_id).unwrap().state, AuctionState::Open);
-
-        // Start commit phase (Open -> Commit)
-        c.start_commit_phase(auction_id);
         assert_eq!(c.get_auction(auction_id).unwrap().state, AuctionState::Commit);
 
         // Commit bid with 0.01 NEAR deposit
@@ -595,8 +568,6 @@ mod tests {
         let borrower: AccountId = "borrower.testnet".parse().unwrap();
         c.approve_borrower(borrower.clone(), U128(100_000), "prop".into());
         let auction_id = c.create_auction(10_000, 10_000);
-        c.open_auction(auction_id);
-        c.start_commit_phase(auction_id);
 
         let hash = hash_commitment(100, 500, 30, "s", &borrower);
 
@@ -617,8 +588,6 @@ mod tests {
         let borrower: AccountId = "borrower.testnet".parse().unwrap();
         c.approve_borrower(borrower.clone(), U128(100_000), "prop".into());
         let auction_id = c.create_auction(10_000, 10_000);
-        c.open_auction(auction_id);
-        c.start_commit_phase(auction_id);
 
         let hash = hash_commitment(100, 500, 30, "s", &borrower);
         testing_env!(VMContextBuilder::new()
@@ -645,7 +614,6 @@ mod tests {
     fn test_cancel_auction() {
         let mut c = contract();
         let auction_id = c.create_auction(10_000, 10_000);
-        c.open_auction(auction_id);
 
         let admin: AccountId = "admin.testnet".parse().unwrap();
         testing_env!(VMContextBuilder::new()
@@ -662,8 +630,6 @@ mod tests {
         let borrower: AccountId = "borrower.testnet".parse().unwrap();
         c.approve_borrower(borrower.clone(), U128(100_000), "prop".into());
         let auction_id = c.create_auction(10_000, 10_000);
-        c.open_auction(auction_id);
-        c.start_commit_phase(auction_id);
 
         let hash = hash_commitment(100, 500, 30, "s", &borrower);
         testing_env!(VMContextBuilder::new()
@@ -697,8 +663,6 @@ mod tests {
     fn test_finalize_with_no_reveals() {
         let mut c = contract();
         let auction_id = c.create_auction(10_000, 10_000);
-        c.open_auction(auction_id);
-        c.start_commit_phase(auction_id);
 
         let admin: AccountId = "admin.testnet".parse().unwrap();
         testing_env!(VMContextBuilder::new()
