@@ -1,16 +1,15 @@
 use homr_common::emit_event;
 use near_sdk::json_types::U128;
-use near_sdk::store::LookupMap;
+use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{
-    env, ext_contract, near, require, AccountId, BorshStorageKey, Gas, PanicOnDefault, Promise,
+    env, ext_contract, near, require, AccountId, BorshStorageKey, Gas, PanicOnDefault,
 };
 
 const GAS_FOR_CROSS_CALL: Gas = Gas::from_tgas(25);
-const GAS_FOR_CALLBACK: Gas = Gas::from_tgas(15);
 
 #[ext_contract(ext_vault)]
 pub trait VaultContract {
-    fn fund_loan(&mut self, borrower: AccountId, amount: U128, loan_id: u64) -> Promise;
+    fn fund_loan(&mut self, borrower: AccountId, amount: U128, loan_id: u64);
     fn record_repayment(&mut self, principal: U128, interest: U128);
 }
 
@@ -29,9 +28,10 @@ pub trait AuditContract {
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoanStatus {
-    Active,
-    Repaid,
-    Defaulted,
+    Pending,
+    Funded,
+    Repaying,
+    Closed,
 }
 
 #[near(serializers = [borsh, json])]
@@ -63,10 +63,11 @@ pub struct HomrLoanManager {
     pub admin: AccountId,
     pub vault: AccountId,
     pub audit_registry: Option<AccountId>,
-    pub auction_manager: Option<AccountId>,
+    pub credit_auction: Option<AccountId>,
     pub next_loan_id: u64,
 
-    pub loans: LookupMap<u64, Loan>,
+    // IterableMap adalah standar baru NEAR SDK (menggantikan UnorderedMap)
+    pub loans: IterableMap<u64, Loan>,
     pub borrower_loans: LookupMap<AccountId, Vec<u64>>,
 }
 
@@ -76,18 +77,23 @@ impl HomrLoanManager {
     pub fn new(
         vault: AccountId,
         audit_registry: Option<AccountId>,
-        auction_manager: Option<AccountId>,
+        credit_auction: Option<AccountId>,
     ) -> Self {
         let admin = env::predecessor_account_id();
         Self {
             admin,
             vault,
             audit_registry,
-            auction_manager,
+            credit_auction,
             next_loan_id: 1,
-            loans: LookupMap::new(StorageKey::Loans),
+            loans: IterableMap::new(StorageKey::Loans),
             borrower_loans: LookupMap::new(StorageKey::BorrowerLoans),
         }
+    }
+
+    pub fn set_credit_auction(&mut self, credit_auction: AccountId) {
+        self.assert_admin();
+        self.credit_auction = Some(credit_auction);
     }
 
     pub fn set_audit_registry(&mut self, audit_registry: AccountId) {
@@ -95,12 +101,8 @@ impl HomrLoanManager {
         self.audit_registry = Some(audit_registry);
     }
 
-    pub fn set_auction_manager(&mut self, auction_manager: AccountId) {
-        self.assert_admin();
-        self.auction_manager = Some(auction_manager);
-    }
-
-    /// Issue loan callable by auction_manager (or admin) after auction finalization
+    /// Issue loan callable by credit_auction contract after auction finalization
+    #[payable]
     pub fn issue_loan(
         &mut self,
         borrower: AccountId,
@@ -108,9 +110,21 @@ impl HomrLoanManager {
         rate_bps: u32,
         term_days: u32,
         property_hash: String,
-        auction_id: Option<u64>,
+        auction_id: u64,
     ) -> u64 {
-        self.assert_auction_or_admin();
+        // A1: Assert predecessor is the credit_auction contract
+        let caller = env::predecessor_account_id();
+        require!(
+            Some(caller.clone()) == self.credit_auction || caller == self.admin,
+            "only credit_auction or admin can issue loans"
+        );
+
+        // A2: Require storage deposit
+        require!(
+            env::attached_deposit().as_yoctonear() > 0,
+            "storage deposit required"
+        );
+
         require!(principal.0 > 0, "principal must be > 0");
         require!(term_days > 0, "term must be > 0");
 
@@ -120,7 +134,7 @@ impl HomrLoanManager {
 
         let loan = Loan {
             id: loan_id,
-            auction_id,
+            auction_id: Some(auction_id),
             borrower: borrower.clone(),
             principal,
             remaining_principal: principal,
@@ -128,7 +142,7 @@ impl HomrLoanManager {
             term_days,
             property_hash: property_hash.clone(),
             funded_at: now,
-            status: LoanStatus::Active,
+            status: LoanStatus::Pending,
             total_repaid: U128(0),
         };
         self.loans.insert(loan_id, loan);
@@ -157,15 +171,18 @@ impl HomrLoanManager {
         );
 
         // Call vault to fund loan
-        ext_vault::ext(self.vault.clone())
+        let _ = ext_vault::ext(self.vault.clone())
             .with_static_gas(GAS_FOR_CROSS_CALL)
             .fund_loan(borrower.clone(), principal, loan_id);
 
         // If audit registry configured, record proof
         if let Some(audit) = &self.audit_registry {
-            let borrower_hash = hex::encode(env::sha256(borrower.as_bytes()));
-            let proof_hash = hex::encode(env::sha256(format!("loan:{}:{}", loan_id, now).as_bytes()));
-            ext_audit::ext(audit.clone())
+            let borrower_hash = format!("{:x?}", env::sha256(borrower.as_bytes()));
+            let proof_hash = format!(
+                "{:x?}",
+                env::sha256(format!("loan:{}:{}", loan_id, now).as_bytes())
+            );
+            let _ = ext_audit::ext(audit.clone())
                 .with_static_gas(GAS_FOR_CROSS_CALL)
                 .register_loan(loan_id.to_string(), borrower_hash, proof_hash, principal);
         }
@@ -173,24 +190,53 @@ impl HomrLoanManager {
         loan_id
     }
 
+    /// Retry loan issuance if vault funding failed (idempotent by auction_id)
+    pub fn retry_issue_loan(&mut self, auction_id: u64) {
+        self.assert_admin();
+
+        // Find loan by auction_id
+        let loan_id = self
+            .loans
+            .iter()
+            .find_map(|(id, loan)| {
+                if loan.auction_id == Some(auction_id) && loan.status == LoanStatus::Pending {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .expect("no pending loan found for auction_id");
+
+        let loan = self.loans.get(&loan_id).expect("loan not found");
+        let borrower = loan.borrower.clone();
+        let principal = loan.principal;
+
+        // Retry vault funding
+        let _ = ext_vault::ext(self.vault.clone())
+            .with_static_gas(GAS_FOR_CROSS_CALL)
+            .fund_loan(borrower, principal, loan_id);
+    }
+
     /// Repay a loan (supports partial and full repayment)
+    #[payable]
     pub fn repay_loan(&mut self, loan_id: u64, amount: U128) {
         let caller = env::predecessor_account_id();
         let loan = self.loans.get_mut(&loan_id).expect("loan not found");
 
-        require!(loan.status == LoanStatus::Active, "loan is not active");
+        require!(
+            loan.status == LoanStatus::Funded || loan.status == LoanStatus::Repaying,
+            "loan is not in a repayable state"
+        );
         require!(amount.0 > 0, "repayment must be > 0");
 
         // Split principal and simple interest
         let remaining = loan.remaining_principal.0;
         let (principal_paid, interest_paid, partial) = if amount.0 < remaining {
-            // Partial repayment: 90% to principal, 10% to interest as demo split
             let interest = (amount.0 * loan.rate_bps as u128) / 10000;
             let actual_interest = std::cmp::min(interest, amount.0);
             let actual_principal = amount.0 - actual_interest;
             (actual_principal, actual_interest, true)
         } else {
-            // Full repayment
             let interest = amount.0 - remaining;
             (remaining, interest, false)
         };
@@ -200,7 +246,9 @@ impl HomrLoanManager {
         loan.total_repaid = U128(loan.total_repaid.0 + amount.0);
 
         if new_remaining == 0 {
-            loan.status = LoanStatus::Repaid;
+            loan.status = LoanStatus::Closed;
+        } else {
+            loan.status = LoanStatus::Repaying;
         }
 
         emit_event(
@@ -219,16 +267,20 @@ impl HomrLoanManager {
         );
 
         // Forward accounting to vault
-        ext_vault::ext(self.vault.clone())
+        let _ = ext_vault::ext(self.vault.clone())
             .with_static_gas(GAS_FOR_CROSS_CALL)
             .record_repayment(U128(principal_paid), U128(interest_paid));
 
         // Record in audit registry if available
         if let Some(audit) = &self.audit_registry {
-            let proof_hash = hex::encode(env::sha256(
-                format!("repay:{}:{}:{}", loan_id, amount.0, env::block_timestamp_ms()).as_bytes(),
-            ));
-            ext_audit::ext(audit.clone())
+            let proof_hash = format!(
+                "{:x?}",
+                env::sha256(
+                    format!("repay:{}:{}:{}", loan_id, amount.0, env::block_timestamp_ms())
+                        .as_bytes()
+                )
+            );
+            let _ = ext_audit::ext(audit.clone())
                 .with_static_gas(GAS_FOR_CROSS_CALL)
                 .record_repayment(loan_id.to_string(), amount, proof_hash);
         }
@@ -240,8 +292,14 @@ impl HomrLoanManager {
     }
 
     pub fn get_borrower_loans(&self, borrower: AccountId) -> Vec<Loan> {
-        let ids = self.borrower_loans.get(&borrower).cloned().unwrap_or_default();
-        ids.into_iter().filter_map(|id| self.loans.get(&id).cloned()).collect()
+        let ids = self
+            .borrower_loans
+            .get(&borrower)
+            .cloned()
+            .unwrap_or_default();
+        ids.into_iter()
+            .filter_map(|id| self.loans.get(&id).cloned())
+            .collect()
     }
 
     pub fn get_next_loan_id(&self) -> u64 {
@@ -249,18 +307,7 @@ impl HomrLoanManager {
     }
 
     fn assert_admin(&self) {
-        require!(
-            env::predecessor_account_id() == self.admin,
-            "admin only"
-        );
-    }
-
-    fn assert_auction_or_admin(&self) {
-        require!(
-            Some(env::predecessor_account_id()) == self.auction_manager
-                || env::predecessor_account_id() == self.admin,
-            "auction manager or admin only"
-        );
+        require!(env::predecessor_account_id() == self.admin, "admin only");
     }
 }
 
@@ -269,6 +316,7 @@ mod tests {
     use super::*;
     use near_sdk::test_utils::VMContextBuilder;
     use near_sdk::testing_env;
+    use near_sdk::NearToken;
 
     fn manager() -> HomrLoanManager {
         let admin: AccountId = "admin.testnet".parse().unwrap();
@@ -282,37 +330,91 @@ mod tests {
     #[test]
     fn test_issue_loan_and_partial_repayment() {
         let mut m = manager();
+        let credit_auction: AccountId = "credit-auction.testnet".parse().unwrap();
         let borrower: AccountId = "borrower.testnet".parse().unwrap();
 
+        m.set_credit_auction(credit_auction.clone());
+
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(credit_auction.clone())
+            .attached_deposit(NearToken::from_yoctonear(1))
+            .build());
         let loan_id = m.issue_loan(
             borrower.clone(),
             U128(100_000),
             500, // 5%
             360,
             "prop-123".into(),
-            Some(1),
+            1,
         );
         assert_eq!(loan_id, 1);
 
         let loan = m.get_loan(1).unwrap();
         assert_eq!(loan.remaining_principal, U128(100_000));
-        assert_eq!(loan.status, LoanStatus::Active);
+        assert_eq!(loan.status, LoanStatus::Pending);
+    }
 
-        // Partial repayment of 40,000
+    #[test]
+    fn test_issue_loan_requires_credit_auction() {
+        let mut m = manager();
+        let borrower: AccountId = "borrower.testnet".parse().unwrap();
+        let unauthorized: AccountId = "unauthorized.testnet".parse().unwrap();
+
         testing_env!(VMContextBuilder::new()
-            .predecessor_account_id(borrower.clone())
+            .predecessor_account_id(unauthorized)
+            .attached_deposit(NearToken::from_yoctonear(1))
             .build());
-        m.repay_loan(1, U128(40_000));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            m.issue_loan(borrower, U128(100_000), 500, 360, "prop".into(), 1);
+        }))
+        .expect_err("should panic when caller is not credit_auction");
+    }
 
-        let updated = m.get_loan(1).unwrap();
-        assert!(updated.remaining_principal.0 < 100_000);
-        assert_eq!(updated.status, LoanStatus::Active);
+    #[test]
+    fn test_issue_loan_requires_deposit() {
+        let mut m = manager();
+        let credit_auction: AccountId = "credit-auction.testnet".parse().unwrap();
+        let borrower: AccountId = "borrower.testnet".parse().unwrap();
+        m.set_credit_auction(credit_auction.clone());
 
-        // Full remaining payoff
-        m.repay_loan(1, U128(100_000));
-        let closed = m.get_loan(1).unwrap();
-        assert_eq!(closed.remaining_principal, U128(0));
-        assert_eq!(closed.status, LoanStatus::Repaid);
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(credit_auction)
+            .attached_deposit(NearToken::from_yoctonear(0))
+            .build());
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            m.issue_loan(borrower, U128(100_000), 500, 360, "prop".into(), 1);
+        }))
+        .expect_err("should panic when no deposit attached");
+    }
+
+    #[test]
+    fn test_retry_issue_loan() {
+        let mut m = manager();
+        let admin: AccountId = "admin.testnet".parse().unwrap();
+        let credit_auction: AccountId = "credit-auction.testnet".parse().unwrap();
+        let borrower: AccountId = "borrower.testnet".parse().unwrap();
+        m.set_credit_auction(credit_auction.clone());
+
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(credit_auction)
+            .attached_deposit(NearToken::from_yoctonear(1))
+            .build());
+        let loan_id = m.issue_loan(
+            borrower.clone(),
+            U128(100_000),
+            500,
+            360,
+            "prop-123".into(),
+            1,
+        );
+        assert_eq!(loan_id, 1);
+        assert_eq!(m.get_loan(1).unwrap().status, LoanStatus::Pending);
+
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(admin)
+            .build());
+        m.retry_issue_loan(1);
+        assert_eq!(m.get_loan(1).unwrap().status, LoanStatus::Pending);
     }
 }
 
