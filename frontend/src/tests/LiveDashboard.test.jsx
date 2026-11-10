@@ -10,26 +10,25 @@ import { createApplication, fetchApplications } from '../api/client';
 
 vi.mock('../api/client', () => ({ createApplication: vi.fn(), fetchApplications: vi.fn() }));
 
-const state = vi.hoisted(() => ({ address: '0x0000000000000000000000000000000000000001', error: null, repay: vi.fn() }));
-vi.mock('wagmi', () => ({
-  useAccount: () => ({ address: state.address, isConnected: Boolean(state.address), chainId: 97 }),
-  useConnect: () => ({ connect: vi.fn(), connectors: [] }), useDisconnect: () => ({ disconnect: vi.fn() }),
-  useSwitchChain: () => ({ switchChain: vi.fn() })
+const state = vi.hoisted(() => ({ address: 'alice.testnet', error: null, repay: vi.fn() }));
+vi.mock('../context/NearWalletProvider', () => ({
+  useAccount: () => ({ address: state.address, isConnected: Boolean(state.address) }),
+  useNearWallet: () => ({ address: state.address, isConnected: Boolean(state.address), ready: true, connect: vi.fn(), disconnect: vi.fn(), isConnecting: false, error: null })
 }));
 vi.mock('../hooks/useProtocol', () => ({
   useProtocolTransaction: () => ({ transact: state.repay, refresh: vi.fn() }),
   useProtocolQuery: (resource) => ({ error: state.error, refetch: vi.fn(), isPending: false, data:
     resource === 'auction' ? { state: 'RevealPhase', canReveal: true, canCommit: false, bids: [], decimals: 18 } :
       resource === 'loans' ? { loans: [
-        { id: '1', borrower: '0x0000000000000000000000000000000000000001', principal: '12.5', isActive: true, rate: '9', term: '12' },
-        { id: '2', borrower: '0x0000000000000000000000000000000000000002', principal: '50', isActive: true, rate: '9', term: '12' }
+        { id: '1', borrower: 'alice.testnet', principal: '12.5', isActive: true, rate: '9', term: '12' },
+        { id: '2', borrower: 'bob.testnet', principal: '50', isActive: true, rate: '9', term: '12' }
       ] } : undefined
   })
 }));
 const wrap = (child) => <TransactionProvider><MemoryRouter>{child}</MemoryRouter></TransactionProvider>;
 beforeEach(() => {
   state.error = null;
-  state.address = '0x0000000000000000000000000000000000000001';
+  state.address = 'alice.testnet';
   state.repay.mockReset();
   fetchApplications.mockReset().mockResolvedValue({ applications: [] });
   createApplication.mockReset();
@@ -55,8 +54,8 @@ describe('live dashboard', () => {
     expect(amount.readOnly).toBe(true);
     expect(screen.queryByText('Loan #2')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Submit repayment' }));
-    expect(state.repay).toHaveBeenCalledWith('repayLoan', '1');
-    state.address = '0x0000000000000000000000000000000000000002';
+    expect(state.repay).toHaveBeenCalledWith('repayLoan', '1', '12.5');
+    state.address = 'bob.testnet';
     view.rerender(wrap(<BorrowerDashboard />));
     expect(screen.getByLabelText('Full principal repayment (mUSDC)').value).toBe('50');
     expect(screen.queryByText('Loan #1')).toBeNull();
@@ -72,7 +71,7 @@ describe('live dashboard', () => {
 
 const savedApplication = (overrides = {}) => ({
   id: 'application-test',
-  applicant: { walletAddress: state.address },
+  applicant: { accountId: state.address },
   propertyHash: 'TEST-DEED-REFERENCE',
   requestedAmount: '50000000000',
   requestedRate: 950,
@@ -88,11 +87,11 @@ function openProperty() {
 
 describe('borrower application history', () => {
   it('loads only the connected wallet history, newest first, and updates the next step', async () => {
-    state.address = '0xabcdef0000000000000000000000000000000001';
+    state.address = 'carol.testnet';
     fetchApplications.mockResolvedValue({ applications: [
       savedApplication({ id: 'older', createdAt: '2026-10-04T04:00:00.000Z', status: 'REJECTED', reviewNote: 'Property reference incomplete' }),
-      savedApplication({ id: 'other-wallet', applicant: { walletAddress: '0x0000000000000000000000000000000000000002' } }),
-      savedApplication({ id: 'newest', applicant: { walletAddress: state.address.toUpperCase() } }),
+      savedApplication({ id: 'other-wallet', applicant: { walletAddress: 'bob.testnet' } }),
+      savedApplication({ id: 'newest', applicant: { accountId: state.address } }),
     ] });
     render(wrap(<BorrowerDashboard />));
     expect(await screen.findByRole('button', { name: 'View submitted application' })).toBeTruthy();
@@ -125,7 +124,7 @@ describe('borrower application history', () => {
     fireEvent.change(screen.getByLabelText('Property / deed reference'), { target: { value: 'TEST-DEED-REFERENCE' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for credit review' }));
     expect(await screen.findByText('Application #application-test')).toBeTruthy();
-    expect(createApplication).toHaveBeenCalledWith(expect.objectContaining({ walletAddress: state.address, requestedAmount: '50000000000' }));
+    expect(createApplication).toHaveBeenCalledWith(expect.objectContaining({ accountId: state.address, requestedAmount: '50000000000' }));
     expect(screen.queryByLabelText('Applicant full name')).toBeNull();
     view.unmount();
     render(wrap(<BorrowerDashboard />));
@@ -155,7 +154,7 @@ describe('borrower application history', () => {
     const view = render(wrap(<BorrowerDashboard />));
     openProperty();
     expect(screen.getByText('Loading application history...')).toBeTruthy();
-    state.address = '0x0000000000000000000000000000000000000002';
+    state.address = 'bob.testnet';
     fetchApplications.mockResolvedValue({ applications: [savedApplication({ id: 'new-wallet' })] });
     view.rerender(wrap(<BorrowerDashboard />));
     await screen.findByText('Application #new-wallet');

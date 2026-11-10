@@ -18,8 +18,8 @@ import TransparencyLedger from '../components/transparency/TransparencyLedger';
 import { useAuction } from '../hooks/useAuction';
 import { useLoanManager } from '../hooks/useLoanManager';
 import { fetchApplications, reviewApplication, fetchAdminStatus } from '../api/client';
-import { formatUnits } from 'viem';
-import { useAccount } from 'wagmi';
+import { fromRaw } from '../near/contracts';
+import { useAccount } from '../context/NearWalletProvider';
 import ChainStatus from '../components/layout/ChainStatus';
 
 const adminNavigation = [
@@ -140,8 +140,8 @@ export function AdminPanel() {
       : { section: 'bids', label: 'Monitor current bids', detail: 'Review submitted bids and the current auction state.' };
 
   const prefillApproval = (application) => {
-    setBorrowerAddress(application.applicant?.walletAddress || '');
-    setMaxPrincipal(formatUnits(BigInt(application.requestedAmount), 6));
+    setBorrowerAddress(application.applicant?.accountId || '');
+    setMaxPrincipal(fromRaw(application.requestedAmount, 6));
     setPropertyHash(application.propertyHash);
     setActiveSection('approvals');
   };
@@ -218,8 +218,8 @@ export function AdminPanel() {
                         <strong>{application.applicant?.displayName || 'Applicant'}</strong>
                         <DataLabelChip type={application.status === 'APPROVED' ? 'onchain' : application.status === 'REJECTED' ? 'offchain' : 'pending'} label={application.status} />
                       </div>
-                      <p>{application.applicant?.walletAddress}</p>
-                      <small>Property: {application.propertyHash} · Requested {formatUnits(BigInt(application.requestedAmount), 6)} mUSDC at {application.requestedRate / 100}%</small>
+                      <p>{application.applicant?.accountId}</p>
+                      <small>Property: {application.propertyHash} · Requested {fromRaw(application.requestedAmount, 6)} mUSDC at {application.requestedRate / 100}%</small>
                     </div>
                     {application.status === 'PENDING' && (
                       <div className="dashboard-row-actions">
@@ -237,10 +237,10 @@ export function AdminPanel() {
 
       {activeSection === 'approvals' && (
         <>
-          <PageIntro eyebrow="Credit workflow" title="Credit approvals" description="Grant the verified borrower address a maximum principal tied to the reviewed property reference." chipType="onchain" chipLabel="Contract write" />
+          <PageIntro eyebrow="Credit workflow" title="Credit approvals" description="Grant the verified borrower account a maximum principal tied to the reviewed property reference." chipType="onchain" chipLabel="Contract write" />
           <Panel title="Grant borrower limit" description="Use values from a completed offchain assessment. This preserves the existing approval transaction.">
             <form className="dashboard-form" onSubmit={handleApproveSubmit}>
-              <Field label="Borrower EVM address"><input type="text" value={borrowerAddress} onChange={(event) => setBorrowerAddress(event.target.value)} /></Field>
+              <Field label="Borrower NEAR account ID"><input type="text" value={borrowerAddress} onChange={(event) => setBorrowerAddress(event.target.value)} placeholder="borrower.testnet" /></Field>
               <div className="dashboard-form-grid dashboard-form-grid--two">
                 <Field label="Maximum approved principal (mUSDC)"><input type="number" value={maxPrincipal} onChange={(event) => setMaxPrincipal(event.target.value)} /></Field>
                 <Field label="Verified property hash / registry ID"><input type="text" value={propertyHash} onChange={(event) => setPropertyHash(event.target.value)} /></Field>

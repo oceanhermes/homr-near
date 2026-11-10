@@ -7,24 +7,31 @@ import { MemoryRouter } from 'react-router-dom';
 import FaucetPage from '../pages/FaucetPage';
 import { claimFaucetToken, fetchFaucetInfo } from '../api/faucet';
 
-const wallet = vi.hoisted(() => ({ address: undefined, isConnected: false, chainId: undefined }));
-vi.mock('wagmi', () => ({
-  useAccount: () => wallet,
-  useConnect: () => ({ connect: vi.fn(), connectors: [], isPending: false }),
-  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false })
+const wallet = vi.hoisted(() => ({ address: undefined, isConnected: false }));
+const connect = vi.hoisted(() => vi.fn());
+vi.mock('../context/NearWalletProvider', () => ({
+  useNearWallet: () => ({
+    address: wallet.address,
+    isConnected: wallet.isConnected,
+    ready: true,
+    isConnecting: false,
+    error: null,
+    connect,
+    disconnect: vi.fn()
+  })
 }));
 vi.mock('../api/faucet', () => ({
   fetchFaucetInfo: vi.fn(),
   claimFaucetToken: vi.fn()
 }));
 
-const target = '0x1111111111111111111111111111111111111111';
-const info = { success: true, dripBnb: '0.1', dripUsdc: '1000', cooldownSeconds: 3600 };
+const target = 'borrower.testnet';
+const info = { success: true, dripUsdc: '1000', cooldownSeconds: 3600 };
 
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
-  Object.assign(wallet, { address: undefined, isConnected: false, chainId: undefined });
+  Object.assign(wallet, { address: undefined, isConnected: false });
 });
 
 function renderPage() {
@@ -32,20 +39,30 @@ function renderPage() {
 }
 
 describe('faucet page', () => {
-  it('claims mUSDC to a manually entered address and shows the transaction', async () => {
+  it('claims mUSDC to a manually entered NEAR account and shows the transaction', async () => {
     fetchFaucetInfo.mockResolvedValue(info);
-    claimFaucetToken.mockResolvedValue({ success: true, message: 'Successfully sent 1000 MockUSDC!', txHash: '0xabc' });
+    claimFaucetToken.mockResolvedValue({ success: true, message: 'Successfully sent 1000 mUSDC!', txHash: 'near_abc' });
     const user = userEvent.setup();
     renderPage();
 
     await screen.findByText('Faucet ready');
     expect(screen.queryByRole('button', { name: 'Claim BNB testnet' })).toBeNull();
-    fireEvent.change(screen.getByLabelText('Wallet address'), { target: { value: target } });
+    fireEvent.change(screen.getByLabelText('NEAR account ID'), { target: { value: target } });
     await user.click(screen.getByRole('button', { name: 'Claim mUSDC' }));
 
     expect(claimFaucetToken).toHaveBeenCalledWith('usdc', target);
-    expect(await screen.findByText('Successfully sent 1000 MockUSDC!')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'View transaction on the explorer' }).getAttribute('href')).toBe('https://testnet.bscscan.com/tx/0xabc');
+    expect(await screen.findByText('Successfully sent 1000 mUSDC!')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'View transaction on the explorer' }).getAttribute('href')).toBe('https://testnet.nearblocks.io/txns/near_abc');
+  });
+
+  it('rejects an invalid NEAR account id before claiming', async () => {
+    fetchFaucetInfo.mockResolvedValue(info);
+    renderPage();
+
+    await screen.findByText('Faucet ready');
+    fireEvent.change(screen.getByLabelText('NEAR account ID'), { target: { value: 'invalid account!' } });
+    expect(screen.getByText(/Invalid account ID/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Claim mUSDC' }).disabled).toBe(true);
   });
 
   it('keeps claims disabled while the service is unavailable and recovers on retry', async () => {
@@ -54,33 +71,34 @@ describe('faucet page', () => {
     renderPage();
 
     expect(await screen.findByText('The faucet is temporarily unavailable. Please try again later.')).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Wallet address'), { target: { value: target } });
+    fireEvent.change(screen.getByLabelText('NEAR account ID'), { target: { value: target } });
     expect(screen.getByRole('button', { name: 'Claim mUSDC' }).disabled).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     await screen.findByText('Faucet ready');
     expect(screen.getByRole('button', { name: 'Claim mUSDC' }).disabled).toBe(false);
   });
 
-  it('asks a connected wallet on another chain to switch before claiming', async () => {
-    Object.assign(wallet, { address: target, isConnected: true, chainId: 1 });
+  it('offers the NEAR wallet selector to a visitor without a wallet', async () => {
     fetchFaucetInfo.mockResolvedValue(info);
-    renderPage();
-
-    await screen.findByText('Faucet ready');
-    expect(screen.getByRole('button', { name: 'Switch to testnet' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Claim mUSDC' }).disabled).toBe(true);
-  });
-
-  it('shows the cooldown error returned after a claim attempt', async () => {
-    fetchFaucetInfo.mockResolvedValue(info);
-    claimFaucetToken.mockRejectedValue(new Error('Wait 1 hour before claiming USDC again'));
     const user = userEvent.setup();
     renderPage();
 
     await screen.findByText('Faucet ready');
-    fireEvent.change(screen.getByLabelText('Wallet address'), { target: { value: target } });
+    await user.click(screen.getByRole('button', { name: 'Connect NEAR wallet' }));
+    expect(connect).toHaveBeenCalled();
+  });
+
+  it('prefills the connected account and shows the cooldown error after a claim attempt', async () => {
+    Object.assign(wallet, { address: 'alice.testnet', isConnected: true });
+    fetchFaucetInfo.mockResolvedValue(info);
+    claimFaucetToken.mockRejectedValue(new Error('Wait 1 hour before claiming mUSDC again'));
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('Faucet ready');
+    expect(screen.getByLabelText('NEAR account ID').value).toBe('alice.testnet');
     await user.click(screen.getByRole('button', { name: 'Claim mUSDC' }));
 
-    expect(await screen.findByText('Wait 1 hour before claiming USDC again')).toBeTruthy();
+    expect(await screen.findByText('Wait 1 hour before claiming mUSDC again')).toBeTruthy();
   });
 });

@@ -1,11 +1,11 @@
 import React from 'react';
-import { CHAIN_CONFIG } from '../../contracts/addresses';
+import { NEAR_CONFIG } from '../../contracts/addresses';
 
 export function TxLink({ hash, label }) {
   if (!hash) return <span className="tx-link__empty">-</span>;
 
   const truncated = `${hash.slice(0, 6)}...${hash.slice(-4)}`;
-  const url = `${CHAIN_CONFIG.blockExplorer}/tx/${hash}`;
+  const url = `${NEAR_CONFIG.explorerUrl}/txns/${hash}`;
 
   return (
     <a

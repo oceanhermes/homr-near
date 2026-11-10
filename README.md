@@ -1,112 +1,128 @@
-# HOMR
+# HOMR — Fully NEAR-Native Decentralized Housing Credit Infrastructure
 
-HOMR is an Indonesia-focused housing-credit prototype. Investors deposit test stablecoins into a vault, approved borrowers compete for limited capital through a commit-reveal auction, and the resulting loan and repayment events remain observable onchain.
+HOMR is an institutional-grade, Indonesia-focused decentralized housing-credit platform built 100% natively on **NEAR Protocol**.
 
-## What changed for NEAR HACKATHON
+Investors deposit NEP-141 stablecoins into a liquidity vault that issues dynamic NAV-bearing `hvSHARE` tokens. Pre-underwritten borrowers compete for credit allocation through a sealed-bid **commit-reveal auction**. Capital allocation, loan management, and amortized repayments are enforced onchain with immutable compliance proofs queryable directly on NEAR.
 
-HOMR started as an EVM prototype deployed on BNB Chain Testnet. The hackathon integration adds a native NEAR registry contract for auction, loan, and repayment proof hashes. Deployment to NEAR Testnet is pending a team-controlled account. The existing Solidity vault is not a NEAR contract.
+```mermaid
+flowchart TD
+    subgraph Investors
+        INV[Investor Wallet]
+    end
 
-Native NEAR uses `testnet`/`mainnet` network IDs and NEAR account IDs. It does not use an EVM chain ID. The Solidity flow remains the disclosed baseline; the native NEAR registry is the new hackathon deliverable.
+    subgraph Borrowers
+        BOR[Borrower Wallet]
+    end
 
-## Judge path
+    subgraph "NEAR Protocol Smart Contracts (contracts/)"
+        TOKEN[Underlying NEP-141 Stablecoin]
+        VAULT["housing_vault<br/>(NEP-141 hvSHARE + NAV Accounting)"]
+        AUCTION["credit_auction<br/>(Commit-Reveal Sealed Bids)"]
+        LOAN["loan_manager<br/>(Issuance & Amortized Repayment)"]
+        AUDIT["audit_registry<br/>(Immutable Proofs & LookupMap)"]
+    end
 
-1. Open the hosted frontend or run it locally.
-2. Select `View the walletless demo` to see the complete deposit, approval, commit, reveal, allocation, and repayment narrative without a wallet.
-3. Once deployed, inspect the native NEAR registry account and its view methods on NEAR Testnet. The walletless demo includes a proof lookup that reports when deployment is pending.
-4. Use the walletless demo for the full product narrative.
-5. If the EVM baseline is enabled, use its existing faucet and dashboard separately.
-6. After deployment, review the NEAR account and transaction IDs recorded in `DEPLOY_NOTES.md`.
+    subgraph "Offchain Infrastructure"
+        API["Fastify API & Demo Relayer<br/>(NEP-413 Ed25519 Auth)"]
+        INDEXER["NEAR Lake / Block Indexer<br/>(NEP-297 EVENT_JSON Parser)"]
+        DB[(PostgreSQL Database)]
+        UI["React Frontend<br/>(NEAR Wallet Selector + Walletless Demo)"]
+    end
 
-The walletless page is explicitly labelled `SIMULATED DEMO`. It does not imply that funds moved or that a real borrower was underwritten.
+    %% Flows
+    INV -->|ft_transfer_call deposit| VAULT
+    VAULT -->|mints hvSHARE at current NAV| INV
+    BOR -->|commit_bid + 1 yocto| AUCTION
+    BOR -->|reveal_bid params| AUCTION
+    AUCTION -->|finalize: winner selected| LOAN
+    LOAN -->|fund_loan cross-contract| VAULT
+    VAULT -->|ft_transfer disbursement| BOR
+    BOR -->|repay_loan partial or full| LOAN
+    LOAN -->|splits principal & interest| VAULT
+    AUCTION -.->|register_auction| AUDIT
+    LOAN -.->|register_loan & record_repayment| AUDIT
 
-## Local setup
-
-### Frontend
-
-```sh
-cd frontend
-npm install
-copy .env.example .env
-npm run dev
+    %% Offchain observation
+    VAULT -.->|EVENT_JSON| INDEXER
+    AUCTION -.->|EVENT_JSON| INDEXER
+    LOAN -.->|EVENT_JSON| INDEXER
+    INDEXER --> DB
+    API --> DB
+    UI --> API
+    UI -->|near view calls| AUDIT
 ```
 
-The native NEAR registry uses:
+---
 
-```env
-VITE_NEAR_NETWORK_ID=testnet
-VITE_NEAR_RPC_URL=https://archival-rpc.testnet.near.org
-VITE_NEAR_CONTRACT_ID=registry-account.testnet
+## Architecture Overview
+
+All smart contracts are written in idiomatic Rust using `near-sdk v5.17+` with strict safety controls:
+* **`contracts/credit_auction`**: Commit-reveal sealed bidding with monotonic `auction_id` sequence, zero unbounded storage loops, and 1 yocto deposit guards.
+* **`contracts/housing_vault`**: NEP-141 vault share token (`hvSHARE`) with real-time Net Asset Value (NAV) appreciation as interest repayments accrue.
+* **`contracts/loan_manager`**: Lifecycle manager for loan issuance, cross-contract capital disbursement from vault, and amortized partial repayments.
+* **`contracts/audit_registry`**: High-performance immutable proof storage backed by `near_sdk::store::LookupMap` with trusted contract access control.
+* **`contracts/common`**: Shared NEP-297 event utilities, proof schemas, and cryptographic commitment hashing functions.
+* **`contracts/mock_token`**: Standalone NEP-141 test stablecoin implementation for local sandbox testing.
+
+*Note: The original EVM/BNB Chain prototype code has been retired and preserved under `legacy/`.*
+
+---
+
+## Directory Layout
+
+```
+homr-near/
+├── contracts/               # NEAR Rust Workspace
+│   ├── common/              # Shared types, NEP-297 event emitter, crypto utils
+│   ├── audit_registry/      # Immutable proof registry (LookupMap)
+│   ├── credit_auction/      # Commit-reveal auction
+│   ├── housing_vault/       # Liquidity vault & NEP-141 hvSHARE
+│   ├── loan_manager/        # Loan issuance & repayments
+│   └── mock_token/          # Test NEP-141 stablecoin
+├── api/                     # Fastify backend, NEAR indexer, and demo relayer
+├── frontend/                # React Vite app with NEAR Wallet Selector
+├── legacy/                  # Deprecated EVM Solidity baseline (archival only)
+├── MIGRATION_PLAN.md        # Comprehensive migration roadmap & tracking
+└── README.md
 ```
 
-The existing EVM baseline keeps its own `VITE_*_ADDRESS` values and is not the native NEAR contract.
+---
 
-### Native NEAR contract
+## Local Development & Testing
 
-```sh
-cd near
-cargo check --target wasm32-unknown-unknown
+### 1. Build and Test Smart Contracts
+```bash
+# Check and test all contracts
+cargo test --workspace
+
+# Build WebAssembly contract binaries
+cargo build --target wasm32-unknown-unknown --release
 ```
 
-See [`near/README.md`](near/README.md) for the `cargo near build` and NEAR CLI deployment flow. Deployment requires a funded NEAR Testnet account and is intentionally not performed automatically.
-
-After an EVM auction or repayment transaction, `cd backend` and run `npm run proof:prepare -- <transaction-hash>` to produce reviewable NEAR registry call arguments from its confirmed receipt. The command is read only and does not submit the NEAR call.
-
-### Smart contracts
-
-```sh
-cd backend
-npm install
-npm test
-npm run compile
-```
-
-The Solidity baseline can still be deployed only after the team has funded and approved the intended EVM testnet wallet:
-
-```sh
-npm run deploy:bnb
-```
-
-The deployment script writes `DEPLOY_NOTES.md` and `deployments.json`. Do not commit private keys or `.env` files.
-
-### API
-
-```sh
+### 2. Run API & Indexer
+```bash
 cd api
 npm install
-copy .env.example .env
-npm run build
 npm run dev
 ```
 
-The API requires a database URL, the baseline EVM contract addresses, an admin key, and `DEPLOY_BLOCK`. Native NEAR configuration belongs in `NEAR_NETWORK_ID`, `NEAR_RPC_URL`, and `NEAR_CONTRACT_ID`; it is not represented by `CHAIN_ID`.
+### 3. Run Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-## Contract roles
+---
 
-- `HousingCreditVault.LOAN_MANAGER_ROLE`: `LoanManager`
-- `LoanManager.AUCTION_MANAGER_ROLE`: `CreditAuction`
-- `CreditAuction.CREDIT_MANAGER_ROLE`: approved credit manager wallet
-- `CreditAuction.AUCTION_MANAGER_ROLE`: auction operator wallet
+## Security & Design Guarantees
 
-The contracts are hackathon MVP contracts and have not been audited. The admin role is intentionally visible in the demo and must be replaced with multisig and timelock controls before production use.
+1. **State Scaling**: Strictly prohibits `std::collections::HashMap` for contract state. All persistent data structures utilize `near_sdk::store::LookupMap` and `Vector`.
+2. **Safe Math**: All release profiles enforce `overflow-checks = true`. Financial quantities use 128-bit unsigned integers (`U128`).
+3. **Promise Safety**: All cross-contract callback methods are annotated with `#[private]` and strictly check `env::current_account_id() == env::predecessor_account_id()`.
+4. **Transparent Auditability**: State transitions emit standardized NEP-297 `EVENT_JSON:` logs consumed directly by the indexer without ABI requirements.
 
-## Phase status
-
-### Phase 1: Hackathon MVP
-
-Implemented locally: vault deposit and shares, borrower approval, commit-reveal auction, deterministic allocation, loan creation, repayment, a native NEAR proof registry with immutable loan and repayment evidence, transaction transparency, and a walletless demo fallback. NEAR Testnet deployment and proof transactions remain pending.
-
-### Phase 2: Controlled pilot
-
-Not activated by the demo. The planned work is KYB/KYC, licensed servicing, document hashes, valuation providers, multisig operations, risk policy configuration, reserve accounting, reporting, and legal review.
-
-### Phase 3: Production network
-
-Not represented as a live claim. The roadmap is multiple strategies, institutional onboarding, audited contracts, permissioned access, secondary liquidity, and multiple originators.
-
-## Disclosure
-
-Mock USDC has no monetary value. Property, borrower, underwriting, and repayment details in the demo are simulated. The prototype demonstrates accounting and allocation mechanics, not repayment capacity or enforceable collateral.
+---
 
 ## License
-
 MIT

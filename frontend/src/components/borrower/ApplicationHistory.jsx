@@ -1,5 +1,5 @@
 import React from 'react';
-import { formatUnits } from 'viem';
+import { fromRaw } from '../../near/contracts';
 import { EmptyState, Notice, Panel } from '../layout/DashboardPrimitives';
 import InboxRow from '../ui/InboxRow';
 
@@ -21,7 +21,7 @@ export default function ApplicationHistory({ applications, status, error, addres
               <InboxRow
                 key={application.id}
                 statusDotColor={application.status === 'APPROVED' ? 'var(--badge-success)' : application.status === 'PENDING' ? 'var(--badge-warning)' : null}
-                title={`${formatUnits(BigInt(application.requestedAmount), 6)} mUSDC`}
+                title={`${fromRaw(application.requestedAmount, 6)} mUSDC`}
                 dataType={null}
                 customRight={<span className="dashboard-row-status">{statusLabels[application.status] || application.status}</span>}
                 subtitle={<>

@@ -17,6 +17,8 @@ backend/artifacts/
 backend/cache/
 backend/typechain-types/
 near/target/
+contracts/target/
+target/
 
 # Next.js
 .next/
@@ -66,3 +68,4 @@ backend/faucet/data/
 *.[mM][dD]
 !README.md
 !near/README.md
+!MIGRATION_PLAN.md

@@ -1,38 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { apiKeyAuth } from "../middleware/apiKeyAuth.js";
+import { adminAuth } from "../middleware/nearAuth.js";
 import { reviewApplication } from "../modules/applications/service.js";
 import { startAuction, finalizeAuction } from "../modules/auctions/service.js";
-import { publicClient, walletClient } from "../chain/contracts.js";
 import { config } from "../config.js";
 
-/**
- * Helper: mapping error code dari service/signer ke HTTP response.
- * Return null kalau tidak dikenali — biar caller pakai fallback 500.
- */
 function mapAdminError(msg: string): { code: number; body: Record<string, unknown> } | null {
-    // === Role / access control ===
-    if (msg.startsWith("MISSING_ROLE:")) {
-        const role = msg.split(":")[1];
-        return {
-            code: 403,
-            body: {
-                error: "MISSING_ROLE",
-                message: `Wallet admin tidak punya ${role}. Hubungi operator untuk grant role.`,
-                requiredRole: role,
-            },
-        };
-    }
-    if (msg === "ACCESS_CONTROL_DENIED") {
-        return {
-            code: 403,
-            body: {
-                error: "ACCESS_CONTROL_DENIED",
-                message: "Wallet admin tidak punya role yang dibutuhkan.",
-            },
-        };
-    }
-
-    // === Application review ===
     if (msg === "APPLICATION_NOT_FOUND") {
         return { code: 404, body: { error: msg } };
     }
@@ -54,55 +26,8 @@ function mapAdminError(msg: string): { code: number; body: Record<string, unknow
             },
         };
     }
-    if (msg === "BORROWER_NOT_APPROVED") {
-        return {
-            code: 409,
-            body: {
-                error: msg,
-                message: "Borrower ini belum di-approve di kontrak.",
-            },
-        };
-    }
-    if (msg === "AMOUNT_EXCEEDS_APPROVAL") {
-        return {
-            code: 409,
-            body: {
-                error: msg,
-                message: "Jumlah bid melebihi approval maksimum untuk borrower ini.",
-            },
-        };
-    }
-    if (msg === "AMOUNT_EXCEEDS_TOKEN_PRECISION") {
-        return {
-            code: 400,
-            body: {
-                error: msg,
-                message: "Jumlah tidak cocok dengan presisi token. Gunakan angka bulat.",
-            },
-        };
-    }
-
-    // === Auction lifecycle ===
     if (msg === "AUCTION_NOT_FOUND") {
         return { code: 404, body: { error: msg } };
-    }
-    if (msg === "AUCTION_IN_PROGRESS") {
-        return {
-            code: 409,
-            body: {
-                error: msg,
-                message: "Tidak bisa start auction baru — masih ada auction yang aktif. Finalize dulu yang sedang berjalan.",
-            },
-        };
-    }
-    if (msg === "AUCTION_TOO_EARLY") {
-        return {
-            code: 409,
-            body: {
-                error: msg,
-                message: "Reveal phase belum berakhir. Tunggu sampai deadline lewat sebelum finalize.",
-            },
-        };
     }
     if (msg === "AUCTION_ALREADY_FINALIZED") {
         return {
@@ -114,66 +39,27 @@ function mapAdminError(msg: string): { code: number; body: Record<string, unknow
         };
     }
 
-    // === Vault / capital ===
-    if (msg === "INSUFFICIENT_VAULT_CAPITAL") {
-        return {
-            code: 409,
-            body: {
-                error: msg,
-                message: "Vault tidak punya cukup modal untuk mengalokasikan loan ini.",
-            },
-        };
-    }
-
-    // === Fallback: revert dengan pesan detail dari kontrak ===
-    // Format: "PREFIX:detail..." dari classifyContractError di signer.ts
-    if (msg.includes(":")) {
-        const [prefix, ...rest] = msg.split(":");
-        if (
-            prefix === "APPROVAL_REVERTED" ||
-            prefix === "AUCTION_START_REVERTED" ||
-            prefix === "AUCTION_FINALIZE_REVERTED"
-        ) {
-            return {
-                code: 409,
-                body: {
-                    error: prefix,
-                    message: rest.join(":").slice(0, 300), // limit panjang
-                },
-            };
-        }
-    }
-
-    // Tidak dikenali
     return null;
 }
 
 export async function adminRoutes(app: FastifyInstance) {
-    // Semua route admin butuh API key
-    app.addHook("onRequest", apiKeyAuth);
+    app.addHook("onRequest", adminAuth);
 
-    // ============================================================
-    // GET /status — cek admin address, balance, alamat kontrak
-    // ============================================================
     app.get("/status", async () => {
-        const admin = walletClient.account!.address;
-        const balance = await publicClient.getBalance({ address: admin });
         return {
-            adminAddress: admin,
-            balanceWei: balance.toString(),
-            balanceNative: (Number(balance) / 1e18).toFixed(6),
-            chainId: config.CHAIN_ID,
+            adminAccounts: config.adminAccountIds,
+            networkId: config.NEAR_NETWORK_ID,
+            nodeUrl: config.NEAR_NODE_URL,
             contracts: {
-                vault: config.addresses.vault,
-                auction: config.addresses.auction,
-                loanManager: config.addresses.loanManager,
+                vault: config.contracts.vault,
+                auction: config.contracts.auction,
+                loanManager: config.contracts.loanManager,
+                audit: config.contracts.audit,
+                token: config.contracts.token,
             },
         };
     });
 
-    // ============================================================
-    // POST /applications/:id/review — APPROVE / REJECT
-    // ============================================================
     app.post("/applications/:id/review", async (req, reply) => {
         const { id } = req.params as { id: string };
         const body = req.body as {
@@ -209,9 +95,6 @@ export async function adminRoutes(app: FastifyInstance) {
         }
     });
 
-    // ============================================================
-    // POST /auctions — start auction baru
-    // ============================================================
     app.post("/auctions", async (req, reply) => {
         const body = req.body as { commitDuration?: number; revealDuration?: number };
 
@@ -219,20 +102,6 @@ export async function adminRoutes(app: FastifyInstance) {
             return reply.code(400).send({
                 error: "MISSING_DURATIONS",
                 message: "commitDuration and revealDuration required (seconds)",
-            });
-        }
-
-        if (!Number.isInteger(body.commitDuration) || !Number.isInteger(body.revealDuration)) {
-            return reply.code(400).send({
-                error: "INVALID_DURATIONS",
-                message: "commitDuration dan revealDuration harus bilangan bulat",
-            });
-        }
-
-        if (body.commitDuration < 0 || body.revealDuration < 0) {
-            return reply.code(400).send({
-                error: "INVALID_DURATIONS",
-                message: "commitDuration and revealDuration must be positive",
             });
         }
 
@@ -253,9 +122,6 @@ export async function adminRoutes(app: FastifyInstance) {
         }
     });
 
-    // ============================================================
-    // POST /auctions/:id/finalize — finalize auction
-    // ============================================================
     app.post("/auctions/:id/finalize", async (req, reply) => {
         const { id } = req.params as { id: string };
 
