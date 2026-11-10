@@ -551,7 +551,7 @@ mod tests {
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(borrower.clone())
             .attached_deposit(STORAGE_COMMIT_DEPOSIT)
-            .block_timestamp(1_000_000)
+            .block_timestamp(1_000_000_000)
             .build());
         c.commit_bid(auction_id, hash.clone());
         assert_eq!(c.get_commitment(auction_id, borrower.clone()).unwrap(), hash);
@@ -560,7 +560,7 @@ mod tests {
         // Reveal bid (Commit -> Reveal auto-transition) - deposit refunded
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(borrower.clone())
-            .block_timestamp(11_000_000)
+            .block_timestamp(15_000_000_000)
             .build());
         let refund_promise = c.reveal_bid(auction_id, U128(amount), rate_bps, term_days, salt.into());
         // Note: In unit tests, promises don't execute, but we can verify state
@@ -574,11 +574,14 @@ mod tests {
         let admin: AccountId = "admin.testnet".parse().unwrap();
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(admin)
-            .block_timestamp(21_000_000)
+            .block_timestamp(30_000_000_000)
             .build());
         let result = c.finalize_auction(auction_id);
         assert!(matches!(result, PromiseOrValue::Value(Some(_))));
-        let winner = result.into_value().unwrap();
+        let winner = match result {
+    near_sdk::PromiseOrValue::Value(v) => v.unwrap(),
+    near_sdk::PromiseOrValue::Promise(_) => panic!("Expected Value, got Promise"),
+};
         assert_eq!(winner.borrower, borrower);
         assert_eq!(winner.rate_bps, rate_bps);
 
@@ -621,7 +624,7 @@ mod tests {
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(borrower.clone())
             .attached_deposit(STORAGE_COMMIT_DEPOSIT)
-            .block_timestamp(1_000)
+            .block_timestamp(1_000_000_000)
             .build());
         c.commit_bid(auction_id, hash);
 
@@ -631,7 +634,7 @@ mod tests {
         // Reveal - deposit should be refunded (removed from storage)
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(borrower.clone())
-            .block_timestamp(11_000_000)
+            .block_timestamp(15_000_000_000)
             .build());
         c.reveal_bid(auction_id, U128(100), 500, 30, "s".into());
 
@@ -666,20 +669,20 @@ mod tests {
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(borrower.clone())
             .attached_deposit(STORAGE_COMMIT_DEPOSIT)
-            .block_timestamp(1_000)
+            .block_timestamp(1_000_000_000)
             .build());
         c.commit_bid(auction_id, hash);
 
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(borrower.clone())
-            .block_timestamp(11_000_000)
+            .block_timestamp(15_000_000_000)
             .build());
         c.reveal_bid(auction_id, U128(100), 500, 30, "s".into());
 
         let admin: AccountId = "admin.testnet".parse().unwrap();
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(admin.clone())
-            .block_timestamp(21_000_000)
+            .block_timestamp(30_000_000_000)
             .build());
         c.finalize_auction(auction_id);
 
@@ -700,7 +703,7 @@ mod tests {
         let admin: AccountId = "admin.testnet".parse().unwrap();
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(admin)
-            .block_timestamp(25_000_000)
+            .block_timestamp(30_000_000_000)
             .build());
         let result = c.finalize_auction(auction_id);
         assert!(matches!(result, PromiseOrValue::Value(None)));
