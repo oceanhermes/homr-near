@@ -45,9 +45,17 @@ pub struct HomrHousingVault {
     pub underlying_token: AccountId,
     pub loan_manager: Option<AccountId>,
 
-    pub total_shares: u128,
-    pub available_capital: u128,
-    pub deployed_capital: u128,
+    /// A3: True once the first deposit has booked NAV.
+    pub nav_booked: bool,
+
+    /// A3: Underlying tokens currently available for withdrawals (not locked in loans).
+    pub available_underlying: u128,
+    /// A3: Principal outstanding on loans funded by the vault. No on-chain interest.
+    pub total_outstanding_principal: u128,
+    /// A3: Total hvSHARE supply in circulation.
+    pub virtual_shares: u128,
+    /// A3: Total underlying backing all hvSHARE (available + outstanding).
+    pub virtual_assets: u128,
 
     pub balances: LookupMap<AccountId, u128>,
 }
@@ -61,9 +69,11 @@ impl HomrHousingVault {
             admin,
             underlying_token,
             loan_manager,
-            total_shares: 0,
-            available_capital: 0,
-            deployed_capital: 0,
+            nav_booked: false,
+            available_underlying: 0,
+            total_outstanding_principal: 0,
+            virtual_shares: 1_000_000,
+            virtual_assets: 1_000_000,
             balances: LookupMap::new(StorageKey::Balances),
         }
     }
@@ -73,7 +83,51 @@ impl HomrHousingVault {
         self.loan_manager = Some(loan_manager);
     }
 
-    /// NEP-141 deposit hook: called when someone sends underlying tokens to this vault
+    /// A3 (NAV split & anti-inflation): NAV per share is booked off total backing
+    /// (available_underlying + total_outstanding_principal + virtual_assets offset)
+    /// over virtual_shares (which includes the 1e6 seed). Interest is never accrued
+    /// on-chain; the split only moves principal between the two buckets.
+    pub fn nav_booked(&self) -> u128 {
+        if self.virtual_shares == 0 {
+            NAV_PRECISION
+        } else {
+            let backing = self
+                .available_underlying
+                .checked_add(self.total_outstanding_principal)
+                .and_then(|v| v.checked_add(self.virtual_assets))
+                .expect("overflow");
+            backing
+                .checked_mul(NAV_PRECISION)
+                .expect("overflow")
+                .checked_div(self.virtual_shares)
+                .expect("div zero")
+        }
+    }
+
+    /// A3: hvSHARE minted for a deposit of `amount` underlying, priced at the booked NAV.
+    /// shares = amount * virtual_shares / backing. The 1e6/1e6 virtual seed pair
+    /// prevents the first-depositor / donation inflation attack: an attacker donating
+    /// into an empty vault can shift the price by at most delta/1e6.
+    pub fn shares_for_deposit(&self, amount: u128) -> u128 {
+        let backing = self
+            .available_underlying
+            .checked_add(self.total_outstanding_principal)
+            .and_then(|v| v.checked_add(self.virtual_assets))
+            .expect("overflow");
+        if backing == 0 {
+            amount
+        } else {
+            amount
+                .checked_mul(self.virtual_shares)
+                .expect("overflow")
+                .checked_div(backing)
+                .expect("div zero")
+        }
+    }
+
+    /// A5 (NEP-141 ft_on_transfer): if storage is not registered, refund the full amount.
+    /// Otherwise mint hvSHARE at nav_booked and return 0.
+    #[payable]
     pub fn ft_on_transfer(
         &mut self,
         sender_id: AccountId,
@@ -86,25 +140,24 @@ impl HomrHousingVault {
         );
         require!(amount.0 > 0, "amount must be > 0");
 
-        let nav = self.internal_get_nav_per_share();
-        let shares_to_mint = if self.total_shares == 0 {
-            amount.0
-        } else {
-            amount
-                .0
-                .checked_mul(NAV_PRECISION)
-                .expect("overflow")
-                .checked_div(nav)
-                .expect("division error")
-        };
+        // Storage registration: deposits must attach at least 1 NEAR.
+        if env::attached_deposit() < NearToken::from_near(1) {
+            return PromiseOrValue::Value(amount); // refund, storage not registered
+        }
+
+        let shares_to_mint = self.shares_for_deposit(amount.0);
         require!(shares_to_mint > 0, "deposit amount too small for 1 share");
 
-        // Mint shares
+        // First deposit books the NAV. virtual_assets stays a constant 1e6 offset.
+        self.nav_booked = true;
+
+        self.available_underlying += amount.0;
+        self.virtual_shares += shares_to_mint;
+
+        // Mint hvSHARE
         let current_bal = self.balances.get(&sender_id).copied().unwrap_or(0);
         self.balances
             .insert(sender_id.clone(), current_bal + shares_to_mint);
-        self.total_shares += shares_to_mint;
-        self.available_capital += amount.0;
 
         emit_event(
             "nep141",
@@ -124,7 +177,7 @@ impl HomrHousingVault {
                 "investor": sender_id,
                 "assets": amount,
                 "shares": U128(shares_to_mint),
-                "nav": U128(nav),
+                "nav_booked": U128(self.nav_booked()),
             }),
         );
 
@@ -141,7 +194,7 @@ impl HomrHousingVault {
         let current_shares = self.balances.get(&investor).copied().unwrap_or(0);
         require!(current_shares >= shares.0, "insufficient shares");
 
-        let nav = self.internal_get_nav_per_share();
+        let nav = self.nav_booked();
         let underlying_amount = shares
             .0
             .checked_mul(nav)
@@ -150,15 +203,15 @@ impl HomrHousingVault {
             .expect("division error");
 
         require!(
-            self.available_capital >= underlying_amount,
+            self.available_underlying >= underlying_amount,
             "insufficient vault liquidity"
         );
 
-        // Deduct shares and available capital optimistically
+        // Deduct shares and available underlying optimistically
         self.balances
             .insert(investor.clone(), current_shares - shares.0);
-        self.total_shares -= shares.0;
-        self.available_capital -= underlying_amount;
+        self.virtual_shares -= shares.0;
+        self.available_underlying -= underlying_amount;
 
         emit_event(
             "nep141",
@@ -212,24 +265,27 @@ impl HomrHousingVault {
                 // Rollback withdrawal state
                 let cur = self.balances.get(&investor).copied().unwrap_or(0);
                 self.balances.insert(investor, cur + shares.0);
-                self.total_shares += shares.0;
-                self.available_capital += underlying_amount.0;
+                self.virtual_shares += shares.0;
+                self.available_underlying += underlying_amount.0;
                 U128(0)
             }
         }
     }
 
-    /// Disburse capital to borrower for an approved loan
+    /// A3/A5 (fund_loan): callable ONLY by loan_manager. Increases
+    /// total_outstanding_principal and decreases available_underlying.
+    /// Note: NOT #[private] — loan_manager calls this cross-contract; the sole
+    /// access-control guard is assert_loan_manager().
     pub fn fund_loan(&mut self, borrower: AccountId, amount: U128, loan_id: u64) -> Promise {
         self.assert_loan_manager();
         require!(amount.0 > 0, "amount must be > 0");
         require!(
-            self.available_capital >= amount.0,
+            self.available_underlying >= amount.0,
             "insufficient vault liquidity"
         );
 
-        self.available_capital -= amount.0;
-        self.deployed_capital += amount.0;
+        self.available_underlying -= amount.0;
+        self.total_outstanding_principal += amount.0;
 
         emit_event(
             "homr_vault",
@@ -269,23 +325,28 @@ impl HomrHousingVault {
             PromiseResult::Successful(_) => true,
             PromiseResult::Failed => {
                 // Rollback allocation
-                self.available_capital += amount.0;
-                self.deployed_capital -= amount.0;
+                self.available_underlying += amount.0;
+                self.total_outstanding_principal -= amount.0;
                 false
             }
         }
     }
 
-    /// Callback or direct settlement when loan repayment arrives
-    pub fn record_repayment(&mut self, principal: U128, interest: U128) {
+    /// A3/A5 (record_repayment): callable ONLY by loan_manager. Increases
+    /// available_underlying and decreases total_outstanding_principal.
+    /// Interest is NOT accrued on-chain; `_interest` is accepted for
+    /// accounting compatibility but discarded.
+    /// Note: NOT #[private] — loan_manager calls this cross-contract; the sole
+    /// access-control guard is assert_loan_manager().
+    pub fn record_repayment(&mut self, principal: U128, _interest: U128) {
         self.assert_loan_manager();
         require!(
-            self.deployed_capital >= principal.0,
-            "principal exceeds deployed"
+            self.total_outstanding_principal >= principal.0,
+            "principal exceeds outstanding"
         );
 
-        self.deployed_capital -= principal.0;
-        self.available_capital += principal.0 + interest.0;
+        self.total_outstanding_principal -= principal.0;
+        self.available_underlying += principal.0;
 
         emit_event(
             "homr_vault",
@@ -293,48 +354,46 @@ impl HomrHousingVault {
             "repayment_received",
             serde_json::json!({
                 "principal": principal,
-                "interest": interest,
-                "new_nav": U128(self.internal_get_nav_per_share()),
+                "new_nav_booked": U128(self.nav_booked()),
             }),
         );
     }
 
     // View methods
-    pub fn get_nav_per_share(&self) -> U128 {
-        U128(self.internal_get_nav_per_share())
+    pub fn get_nav_booked(&self) -> U128 {
+        U128(self.nav_booked())
     }
 
-    pub fn available_capital(&self) -> U128 {
-        U128(self.available_capital)
+    pub fn get_available_underlying(&self) -> U128 {
+        U128(self.available_underlying)
     }
 
-    pub fn total_deployed_capital(&self) -> U128 {
-        U128(self.deployed_capital)
+    pub fn get_total_outstanding_principal(&self) -> U128 {
+        U128(self.total_outstanding_principal)
+    }
+
+    pub fn get_virtual_assets(&self) -> U128 {
+        U128(self.virtual_assets)
+    }
+
+    pub fn get_virtual_shares(&self) -> U128 {
+        U128(self.virtual_shares)
+    }
+
+    pub fn is_nav_booked(&self) -> bool {
+        self.nav_booked
     }
 
     pub fn total_assets(&self) -> U128 {
-        U128(self.available_capital + self.deployed_capital)
+        U128(self.available_underlying + self.total_outstanding_principal)
     }
 
     pub fn ft_total_supply(&self) -> U128 {
-        U128(self.total_shares)
+        U128(self.virtual_shares)
     }
 
     pub fn ft_balance_of(&self, account_id: AccountId) -> U128 {
         U128(self.balances.get(&account_id).copied().unwrap_or(0))
-    }
-
-    fn internal_get_nav_per_share(&self) -> u128 {
-        if self.total_shares == 0 {
-            NAV_PRECISION
-        } else {
-            let total_assets = self.available_capital + self.deployed_capital;
-            total_assets
-                .checked_mul(NAV_PRECISION)
-                .expect("overflow")
-                .checked_div(self.total_shares)
-                .expect("div zero")
-        }
     }
 
     fn assert_admin(&self) {
@@ -358,6 +417,7 @@ mod tests {
     use super::*;
     use near_sdk::test_utils::VMContextBuilder;
     use near_sdk::testing_env;
+    use near_sdk::NearToken;
 
     fn vault() -> HomrHousingVault {
         let admin: AccountId = "admin.testnet".parse().unwrap();
@@ -369,42 +429,96 @@ mod tests {
     }
 
     #[test]
-    fn test_deposit_and_nav_appreciation() {
+    fn test_deposit_and_nav_booked() {
         let mut v = vault();
         let token: AccountId = "usdc.testnet".parse().unwrap();
         let investor: AccountId = "investor.testnet".parse().unwrap();
 
-        // 1. Initial NAV = 1.0 (1_000_000)
-        assert_eq!(v.get_nav_per_share(), U128(1_000_000));
+        // 1. Initial state: nav_booked = false, virtual_assets = virtual_shares = 1e6,
+        //    so nav_booked = 1.0 (NAV_PRECISION)
+        assert!(!v.is_nav_booked());
+        assert_eq!(v.get_virtual_assets(), U128(1_000_000));
+        assert_eq!(v.get_virtual_shares(), U128(1_000_000));
+        assert_eq!(v.get_nav_booked(), U128(1_000_000));
 
-        // 2. Deposit 100,000 USDC
+        // 2. Deposit 100,000 USDC with storage deposit (1 NEAR)
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(token.clone())
+            .attached_deposit(NearToken::from_near(1))
             .build());
-        v.ft_on_transfer(investor.clone(), U128(100_000), "".into());
+        let result = v.ft_on_transfer(investor.clone(), U128(100_000), "".into());
+        assert!(matches!(result, PromiseOrValue::Value(U128(0))));
 
         assert_eq!(v.ft_balance_of(investor.clone()), U128(100_000));
-        assert_eq!(v.ft_total_supply(), U128(100_000));
-        assert_eq!(v.available_capital(), U128(100_000));
+        assert_eq!(v.get_available_underlying(), U128(100_000));
+        assert!(v.is_nav_booked());
 
-        // 3. Fund a 50,000 loan
+        // 3. Fund a 50,000 loan via loan_manager
+        let loan_manager: AccountId = "loan_manager.testnet".parse().unwrap();
         let admin: AccountId = "admin.testnet".parse().unwrap();
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(admin)
             .build());
-        v.available_capital -= 50_000;
-        v.deployed_capital += 50_000;
-        assert_eq!(v.available_capital(), U128(50_000));
-        assert_eq!(v.total_deployed_capital(), U128(50_000));
-        assert_eq!(v.get_nav_per_share(), U128(1_000_000));
+        v.set_loan_manager(loan_manager.clone());
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(loan_manager.clone())
+            .build());
+        v.fund_loan("borrower.testnet".parse().unwrap(), U128(50_000), 1);
+        assert_eq!(v.get_available_underlying(), U128(50_000));
+        assert_eq!(v.get_total_outstanding_principal(), U128(50_000));
 
-        // 4. Repay with 5,000 interest (55,000 total)
+        // 4. Repay principal 50,000 (interest not accrued on-chain),
+        //    called by loan_manager (assert_loan_manager is the sole guard).
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(loan_manager)
+            .build());
         v.record_repayment(U128(50_000), U128(5_000));
-        assert_eq!(v.available_capital(), U128(105_000));
-        assert_eq!(v.total_deployed_capital(), U128(0));
+        assert_eq!(v.get_available_underlying(), U128(100_000));
+        assert_eq!(v.get_total_outstanding_principal(), U128(0));
+    }
 
-        // NAV should appreciate to 1.05 (1_050_000)
-        assert_eq!(v.get_nav_per_share(), U128(1_050_000));
+    #[test]
+    fn test_ft_on_transfer_without_storage_deposit_refunds() {
+        let mut v = vault();
+        let token: AccountId = "usdc.testnet".parse().unwrap();
+        let investor: AccountId = "investor.testnet".parse().unwrap();
+
+        // Deposit without storage deposit -> refund, no state change
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(token.clone())
+            .attached_deposit(NearToken::from_yoctonear(1))
+            .build());
+        let result = v.ft_on_transfer(investor.clone(), U128(100_000), "".into());
+        assert!(matches!(result, PromiseOrValue::Value(U128(100_000))));
+        assert!(!v.is_nav_booked());
+        assert_eq!(v.ft_balance_of(investor.clone()), U128(0));
+        assert_eq!(v.get_available_underlying(), U128(0));
+    }
+
+    #[test]
+    fn test_unauthorized_fund_loan_panics() {
+        let mut v = vault();
+        let unauthorized: AccountId = "hacker.testnet".parse().unwrap();
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(unauthorized)
+            .build());
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            v.fund_loan("borrower.testnet".parse().unwrap(), U128(100), 1);
+        }))
+        .expect_err("should panic when caller is not loan_manager");
+    }
+
+    #[test]
+    fn test_unauthorized_repayment_panics() {
+        let mut v = vault();
+        let unauthorized: AccountId = "hacker.testnet".parse().unwrap();
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(unauthorized)
+            .build());
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            v.record_repayment(U128(100), U128(5));
+        }))
+        .expect_err("should panic when caller is not loan_manager");
     }
 }
 
