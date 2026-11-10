@@ -941,10 +941,65 @@ dependencies = [
 ]
 
 [[package]]
-name = "homr-near-registry"
+name = "homr-audit-registry"
 version = "0.1.0"
 dependencies = [
+ "homr-common",
  "near-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "homr-common"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "near-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "homr-credit-auction"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "homr-common",
+ "near-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "homr-housing-vault"
+version = "0.1.0"
+dependencies = [
+ "homr-common",
+ "near-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "homr-loan-manager"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "homr-common",
+ "near-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "homr-mock-token"
+version = "0.1.0"
+dependencies = [
+ "homr-common",
+ "near-sdk",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

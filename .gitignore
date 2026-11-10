@@ -18,6 +18,7 @@ backend/cache/
 backend/typechain-types/
 near/target/
 contracts/target/
+target/
 
 # Next.js
 .next/
