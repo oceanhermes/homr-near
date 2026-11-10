@@ -1,47 +1,63 @@
 import { config } from "../config.js";
 import { prisma } from "../db/client.js";
 import { logger } from "../lib/logger.js";
+import { parseNep297Log } from "./nep297.js";
+import type { Nep297Event } from "./nep297.js";
 
-interface Nep297Event {
-    standard: string;
-    version: string;
-    event: string;
-    data: Record<string, unknown> | Array<Record<string, unknown>>;
+// NEP-297 parsing lives in ./nep297.ts (dependency-free, unit-tested); re-exported
+// here so existing callers can keep importing it from the indexer.
+export { parseNep297Log };
+export type { Nep297Event };
+
+// ---------------------------------------------------------------------------
+// Event persistence (idempotent)
+// ---------------------------------------------------------------------------
+
+export type TxSource = "ONCHAIN" | "SIMULATION";
+
+/** Everything the indexer (or demo fallback) knows about where an event came from. */
+export interface EventContext {
+    /** NEAR transaction hash (base58). */
+    txHash: string;
+    /** NEAR receipt id (base58) — the idempotency key. */
+    receiptId: string;
+    /** Position of this log within the receipt (a receipt can emit several events). */
+    logIndex: number;
+    blockHeight: bigint;
+    /** Signer/predecessor of the receipt. */
+    predecessorId: string;
+    txSource: TxSource;
 }
 
-export function parseNep297Log(log: string): Nep297Event | null {
-    if (!log.startsWith("EVENT_JSON:")) return null;
-    try {
-        const jsonStr = log.slice("EVENT_JSON:".length);
-        const parsed = JSON.parse(jsonStr) as Nep297Event;
-        if (parsed.standard && parsed.event) {
-            return parsed;
-        }
-    } catch {
-        // Not valid JSON
-    }
-    return null;
-}
-
-export async function processEvent(
-    event: Nep297Event,
-    txHash: string,
-    blockHeight: bigint,
-    predecessorId?: string
-) {
-    // 1. Record event in ChainEvent
-    await prisma.chainEvent.create({
-        data: {
-            txHash,
-            blockHeight,
-            predecessorId,
+/**
+ * Persist a parsed NEP-297 event and sync the business entities it describes.
+ *
+ * C3 (idempotency): every write is keyed so that re-processing the same block
+ * (e.g. after a reorg replay) is a no-op:
+ *  - ChainEvent → upsert on @@unique([receiptId, logIndex])
+ *                 (the Prisma equivalent of ON CONFLICT (receiptId, logIndex) DO NOTHING)
+ *  - Loan       → upsert on onchainLoanId
+ *  - Repayment  → upsert on @@unique receiptId
+ */
+export async function processEvent(event: Nep297Event, ctx: EventContext): Promise<void> {
+    await prisma.chainEvent.upsert({
+        where: {
+            receiptId_logIndex: { receiptId: ctx.receiptId, logIndex: ctx.logIndex },
+        },
+        create: {
+            receiptId: ctx.receiptId,
+            logIndex: ctx.logIndex,
+            txHash: ctx.txHash,
+            blockHeight: ctx.blockHeight,
+            predecessorId: ctx.predecessorId,
             eventName: event.event,
             standard: event.standard,
             payload: event.data as object,
+            txSource: ctx.txSource,
         },
+        update: {}, // duplicate (reorg replay) → do nothing
     });
 
-    // 2. Business entity sync
     const data = Array.isArray(event.data) ? event.data[0] : event.data;
     if (!data) return;
 
@@ -59,11 +75,9 @@ export async function processEvent(
                 maturity: new Date(Date.now() + Number(data.term_days || 30) * 86400 * 1000),
                 propertyHash: String(data.property_hash || ""),
                 status: "ACTIVE",
-                createTxHash: txHash,
+                createTxHash: ctx.txHash,
             },
-            update: {
-                status: "ACTIVE",
-            },
+            update: {}, // duplicate → do nothing
         });
     } else if (event.event === "loan_repaid") {
         const loanId = BigInt(String(data.loan_id || 0));
@@ -83,25 +97,131 @@ export async function processEvent(
                 },
             });
 
-            await prisma.repayment.create({
-                data: {
+            await prisma.repayment.upsert({
+                where: { receiptId: ctx.receiptId },
+                create: {
                     loanId: existingLoan.id,
                     amount,
-                    txHash,
-                    blockHeight,
+                    txHash: ctx.txHash,
+                    receiptId: ctx.receiptId,
+                    blockHeight: ctx.blockHeight,
                     paidAt: new Date(),
                 },
+                update: {}, // duplicate → do nothing
             });
         }
     }
 }
 
-async function getCursor(): Promise<bigint> {
-    const cursor = await prisma.indexerCursor.findUnique({ where: { id: "singleton" } });
-    return cursor ? cursor.lastBlockHeight : 1000n;
+// ---------------------------------------------------------------------------
+// NEAR RPC plumbing
+// ---------------------------------------------------------------------------
+
+async function rpcCall<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const res = await fetch(config.NEAR_NODE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "homr-indexer", method, params }),
+        signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+        throw new Error(`NEAR RPC HTTP ${res.status} ${res.statusText} (${method})`);
+    }
+    const body = (await res.json()) as { result?: T; error?: { message?: string } };
+    if (body.error) {
+        throw new Error(`NEAR RPC error (${method}): ${body.error.message || "unknown"}`);
+    }
+    if (body.result === undefined) {
+        throw new Error(`NEAR RPC returned no result (${method})`);
+    }
+    return body.result;
 }
 
-async function setCursor(blockHeight: bigint) {
+interface RpcBlockHeader {
+    height: number;
+    hash: string;
+}
+
+interface RpcBlock {
+    header: RpcBlockHeader;
+    chunks: { chunk_hash: string; shard_id: number }[];
+}
+
+interface RpcChunk {
+    transactions: { hash: string; signer_id: string; receiver_id: string }[];
+}
+
+interface RpcTxOutcome {
+    transaction: { hash: string; signer_id: string; receiver_id: string };
+    receipts: { receipt_id: string; predecessor_id: string; receiver_id: string }[];
+    receipts_outcome: { id: string; block_hash: string; outcome: { logs: string[] } }[];
+}
+
+/** Height of the latest block with finality == "final". */
+async function getFinalBlockHeight(): Promise<bigint> {
+    const block = await rpcCall<RpcBlock>("block", { finality: "final" });
+    return BigInt(block.header.height);
+}
+
+/**
+ * Process a single block: fetch it, walk every chunk → transaction → receipt
+ * outcome, and index every NEP-297 `EVENT_JSON:` log.
+ *
+ * B8 finality: the caller only invokes this for heights that are already final
+ * (height <= finalTip - FINALITY_LAG), so reorged blocks are never processed.
+ */
+async function processBlock(blockHeight: bigint): Promise<number> {
+    const block = await rpcCall<RpcBlock>("block", { block_id: Number(blockHeight) });
+    let eventsSeen = 0;
+
+    for (const chunkMeta of block.chunks) {
+        const chunk = await rpcCall<RpcChunk>("chunk", { chunk_id: chunkMeta.chunk_hash });
+
+        for (const tx of chunk.transactions) {
+            const outcome = await rpcCall<RpcTxOutcome>("tx", {
+                tx_hash: tx.hash,
+                sender_id: tx.signer_id,
+            });
+
+            const predecessorById = new Map(
+                outcome.receipts.map((r) => [r.receipt_id, r.predecessor_id])
+            );
+
+            for (const receiptOutcome of outcome.receipts_outcome) {
+                const receiptId = receiptOutcome.id;
+                const predecessorId = predecessorById.get(receiptId) ?? tx.signer_id;
+
+                for (let logIndex = 0; logIndex < receiptOutcome.outcome.logs.length; logIndex++) {
+                    const event = parseNep297Log(receiptOutcome.outcome.logs[logIndex]);
+                    if (!event) continue;
+
+                    await processEvent(event, {
+                        txHash: tx.hash,
+                        receiptId,
+                        logIndex,
+                        blockHeight,
+                        predecessorId,
+                        txSource: "ONCHAIN",
+                    });
+                    eventsSeen++;
+                }
+            }
+        }
+    }
+
+    return eventsSeen;
+}
+
+// ---------------------------------------------------------------------------
+// Cursor + polling loop
+// ---------------------------------------------------------------------------
+
+async function getCursor(): Promise<bigint | null> {
+    const cursor = await prisma.indexerCursor.findUnique({ where: { id: "singleton" } });
+    return cursor ? cursor.lastBlockHeight : null;
+}
+
+async function setCursor(blockHeight: bigint): Promise<void> {
     await prisma.indexerCursor.upsert({
         where: { id: "singleton" },
         create: { id: "singleton", lastBlockHeight: blockHeight },
@@ -109,21 +229,56 @@ async function setCursor(blockHeight: bigint) {
     });
 }
 
-export async function startIndexer() {
-    logger.info("NEAR Indexer starting with finality lag: " + config.FINALITY_LAG);
+export async function startIndexer(): Promise<void> {
+    logger.info(
+        `NEAR Indexer starting (node=${config.NEAR_NODE_URL}, finality lag=${config.FINALITY_LAG} blocks)`
+    );
+
+    const MAX_BLOCKS_PER_TICK = 20;
+    let ticking = false;
 
     const tick = async () => {
+        if (ticking) return; // never overlap ticks
+        ticking = true;
         try {
-            // In standalone mode or testnet connection, check tip
-            const cursor = await getCursor();
-            // Advance cursor
-            await setCursor(cursor + 1n);
+            // Anchor on the latest FINAL block, then lag a few blocks behind it
+            // so we only ever process heights that cannot be reorged away.
+            const finalTip = await getFinalBlockHeight();
+            const maxHeight = finalTip - BigInt(config.FINALITY_LAG);
+
+            let cursor = await getCursor();
+            if (cursor === null) {
+                // First run: start from the (already final) lagged tip instead of
+                // replaying the entire chain history.
+                cursor = maxHeight;
+                await setCursor(maxHeight);
+                logger.info(`NEAR Indexer: no cursor, starting at final height ${maxHeight}`);
+            }
+
+            let height = cursor + 1n;
+            let processed = 0;
+            while (height <= maxHeight && processed < MAX_BLOCKS_PER_TICK) {
+                try {
+                    const events = await processBlock(height);
+                    if (events > 0) {
+                        logger.info(`NEAR Indexer: block ${height} → ${events} NEP-297 event(s)`);
+                    }
+                    await setCursor(height);
+                } catch (err) {
+                    // Do not advance the cursor: retry this block on the next tick.
+                    logger.error(`NEAR Indexer: failed to process block ${height}`, err);
+                    break;
+                }
+                height += 1n;
+                processed++;
+            }
         } catch (err) {
             logger.error("NEAR Indexer tick failed", err);
+        } finally {
+            ticking = false;
         }
     };
 
     await tick();
     setInterval(tick, config.INDEXER_POLL_INTERVAL_MS);
 }
-

@@ -8,6 +8,12 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// B6: origin of a chain event row — real on-chain data vs demo/simulated fallback
+enum TxSource {
+  ONCHAIN
+  SIMULATION
+}
+
 model Applicant {
   id           String        @id @default(cuid())
   accountId    String        @unique
@@ -91,7 +97,7 @@ model Repayment {
   loan        Loan     @relation(fields: [loanId], references: [id])
   amount      BigInt
   txHash      String
-  receiptId   String?
+  receiptId   String?  @unique
   blockHeight BigInt
   paidAt      DateTime
 
@@ -99,17 +105,21 @@ model Repayment {
 }
 
 model ChainEvent {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
+  receiptId     String
+  logIndex      Int       @default(0)
   txHash        String
-  receiptId     String?
   blockHeight   BigInt
-  predecessorId String?
+  predecessorId String
   eventName     String
   standard      String?
   payload       Json
-  createdAt     DateTime @default(now())
+  txSource      TxSource  @default(ONCHAIN)
+  createdAt     DateTime  @default(now())
 
+  @@unique([receiptId, logIndex])
   @@index([eventName])
+  @@index([blockHeight])
 }
 
 model IndexerCursor {

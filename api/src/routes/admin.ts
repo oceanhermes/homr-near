@@ -47,7 +47,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
     app.get("/status", async () => {
         return {
-            adminAccount: config.ADMIN_ACCOUNT_ID,
+            adminAccounts: config.adminAccountIds,
             networkId: config.NEAR_NETWORK_ID,
             nodeUrl: config.NEAR_NODE_URL,
             contracts: {

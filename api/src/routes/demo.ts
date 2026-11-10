@@ -118,12 +118,19 @@ export async function demoRoutes(app: FastifyInstance) {
                 break;
         }
 
-        // Write event to indexer DB so demo immediately reflects in live view
+        // Write event to indexer DB so demo immediately reflects in live view.
+        // B6/C3: demo events are tagged SIMULATION so the ledger can flag them;
+        // receiptId is a random synthetic id (never collides with real receipts).
         await processEvent(
             eventData as unknown as { standard: string; version: string; event: string; data: Record<string, unknown> },
-            txHash,
-            blockHeight,
-            "demo.homr.testnet"
+            {
+                txHash,
+                receiptId: "demo_" + crypto.randomBytes(16).toString("hex"),
+                logIndex: 0,
+                blockHeight,
+                predecessorId: "demo.homr.testnet",
+                txSource: "SIMULATION",
+            }
         );
 
         return {

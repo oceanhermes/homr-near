@@ -22,8 +22,11 @@ const schema = z.object({
 
     // Admin Credentials
     ADMIN_ACCOUNT_ID: z.string().default("admin.homr.testnet"),
+    ADMIN_ACCOUNT_IDS: z.string().default(""), // comma-separated allowlist; falls back to ADMIN_ACCOUNT_ID
     ADMIN_PRIVATE_KEY: z.string().default("ed25519:3D5NzVDzVbZ1F7bZ1F7bZ1F7bZ1F7bZ1F7bZ1F7bZ1F7"),
     ADMIN_API_KEY: z.string().min(8).default("homr_admin_secret_key_2026"),
+    // NEP-413 `recipient` for admin signature challenges
+    NEP413_RECIPIENT: z.string().default("homr-api"),
 
     // Demo Signer (for Walletless Demo)
     DEMO_SIGNER_ACCOUNT_ID: z.string().optional(),
@@ -52,4 +55,12 @@ export const config = {
         audit: parsed.data.AUDIT_CONTRACT,
         token: parsed.data.TOKEN_CONTRACT,
     },
+    // B9: admin allowlist — ADMIN_ACCOUNT_IDS csv wins, else the single ADMIN_ACCOUNT_ID
+    adminAccountIds: parsed.data.ADMIN_ACCOUNT_IDS
+        ? parsed.data.ADMIN_ACCOUNT_IDS
+              .split(",")
+              .map((s: string) => s.trim())
+              .filter(Boolean)
+        : [parsed.data.ADMIN_ACCOUNT_ID],
+    nep413Recipient: parsed.data.NEP413_RECIPIENT,
 };

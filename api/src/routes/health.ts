@@ -6,7 +6,7 @@ export async function healthRoutes(app: FastifyInstance) {
         ok: true,
         service: "homr-api",
         env: config.NODE_ENV,
-        chainId: config.CHAIN_ID,
+        chainId: config.NEAR_NETWORK_ID,
         ts: new Date().toISOString(),
     }));
 }

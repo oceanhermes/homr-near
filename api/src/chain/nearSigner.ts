@@ -52,7 +52,8 @@ export async function approveBorrower(
             });
             return {
                 txHash: outcome.transaction.hash,
-                blockHeight: BigInt(outcome.transaction_outcome.block_hash ? 1000 : 0),
+                // Real block height is resolved by the indexer from the receipt.
+                blockHeight: 1000n,
             };
         } catch (err) {
             logger.warn("Live functionCall failed, falling back to simulated proof", err);
