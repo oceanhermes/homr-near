@@ -1,21 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { isAddress } from 'viem';
-import { useAccount, useConnect, useSwitchChain } from 'wagmi';
 import { claimFaucetToken, fetchFaucetInfo } from '../api/faucet';
-import { CHAIN_CONFIG } from '../contracts/addresses';
+import { useNearWallet } from '../context/NearWalletProvider';
+import { CHAIN_CONFIG, NEAR_CONFIG } from '../contracts/addresses';
 import './faucet.css';
 
-const FAUCET_CHAIN_ID = CHAIN_CONFIG.chainId;
+/** NEP-141 distribution account (testnet). */
+const FAUCET_NETWORK = CHAIN_CONFIG.chainName;
 const tokens = [
   { id: 'usdc', label: 'mUSDC', kind: 'TEST TOKEN', detail: 'Try depositing into the Housing Credit Vault.', amountKey: 'dripUsdc', suffix: 'mUSDC' }
 ];
 
+/** Implicit accounts (64 hex chars) or named accounts such as `alice.testnet`. */
+const ACCOUNT_ID_PATTERN = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
+
+function isValidAccountId(value) {
+  const text = String(value || '');
+  return text.length >= 2 && text.length <= 64 && ACCOUNT_ID_PATTERN.test(text);
+}
+
 export function FaucetPage() {
-  const { address, isConnected, chainId } = useAccount();
-  const { connect, connectors, error: connectError, isPending: isConnecting } = useConnect();
-  const { switchChain, error: switchError, isPending: isSwitching } = useSwitchChain();
-  const [targetAddress, setTargetAddress] = useState(address || '');
+  const { address, isConnected, connect, ready, isConnecting, error: connectError } = useNearWallet();
+  const [targetAccount, setTargetAccount] = useState(address || '');
   const [info, setInfo] = useState(null);
   const [infoState, setInfoState] = useState('loading');
   const [infoError, setInfoError] = useState('');
@@ -23,7 +29,7 @@ export function FaucetPage() {
   const [results, setResults] = useState({ usdc: null });
 
   useEffect(() => {
-    if (address) setTargetAddress(address);
+    if (address) setTargetAccount(address);
   }, [address]);
 
   async function loadInfo() {
@@ -42,16 +48,15 @@ export function FaucetPage() {
 
   useEffect(() => { loadInfo(); }, []);
 
-  const validAddress = isAddress(targetAddress);
-  const wrongChain = isConnected && chainId !== FAUCET_CHAIN_ID;
-  const canClaim = validAddress && infoState === 'ready' && !wrongChain && !claiming;
+  const validAccount = isValidAccountId(targetAccount);
+  const canClaim = validAccount && infoState === 'ready' && !claiming;
 
   async function handleClaim(token) {
     if (!canClaim) return;
     setClaiming(token);
     setResults((current) => ({ ...current, [token]: null }));
     try {
-      const data = await claimFaucetToken(token, targetAddress);
+      const data = await claimFaucetToken(token, targetAccount);
       setResults((current) => ({ ...current, [token]: { type: 'success', message: data.message, txHash: data.txHash } }));
       loadInfo();
     } catch (error) {
@@ -61,8 +66,8 @@ export function FaucetPage() {
     }
   }
 
-  function updateAddress(value) {
-    setTargetAddress(value.trim());
+  function updateAccount(value) {
+    setTargetAccount(value.trim().toLowerCase());
     setResults({ usdc: null });
   }
 
@@ -84,64 +89,55 @@ export function FaucetPage() {
         <section className="faucet-intro" aria-labelledby="faucet-title">
           <div className="hero-network">
             <span>Built on</span>
-            <span className="hero-network-brand">{FAUCET_CHAIN_ID === 97 && <img src="/brand/bnb-chain-symbol.svg" width="22" height="22" alt="" />}<strong>{CHAIN_CONFIG.chainName}</strong></span>
+            <span className="hero-network-brand"><strong>{FAUCET_NETWORK}</strong></span>
           </div>
           <h1 id="faucet-title">Test tokens to <span className="hero-highlight">use HOMR.</span></h1>
           <p>Get mUSDC to try depositing into the HOMR vault. This token works only on testnet.</p>
-          <span className="faucet-intro__note">{CHAIN_CONFIG.chainName.toUpperCase()} <span aria-hidden="true">·</span> CHAIN ID {FAUCET_CHAIN_ID} <span aria-hidden="true">·</span> NO MONETARY VALUE</span>
+          <span className="faucet-intro__note">{FAUCET_NETWORK.toUpperCase()} <span aria-hidden="true">·</span> NETWORK {NEAR_CONFIG.networkId.toUpperCase()} <span aria-hidden="true">·</span> NO MONETARY VALUE</span>
         </section>
 
         <div className="faucet-workspace">
           <div className="faucet-workspace__bar" aria-hidden="true">
             <span className="faucet-workspace__lights"><i /><i /><i /></span>
             <span>HOMR <span>·</span> Testnet Faucet</span>
-            <span className="faucet-workspace__network">{CHAIN_CONFIG.chainName.toUpperCase()}</span>
+            <span className="faucet-workspace__network">{FAUCET_NETWORK.toUpperCase()}</span>
           </div>
           <div className="faucet-layout">
           <section className="faucet-address-panel" aria-labelledby="faucet-address-title">
-            <div className="faucet-panel-index">01 <span>/</span> RECIPIENT ADDRESS</div>
-            <h2 id="faucet-address-title">Send to your wallet.</h2>
-            <p>Connect your wallet or enter an EVM wallet address manually.</p>
+            <div className="faucet-panel-index">01 <span>/</span> RECIPIENT ACCOUNT</div>
+            <h2 id="faucet-address-title">Send to your account.</h2>
+            <p>Connect your wallet or enter a NEAR account ID manually.</p>
 
-            <label className="faucet-address-label" htmlFor="faucet-address">Wallet address</label>
+            <label className="faucet-address-label" htmlFor="faucet-address">NEAR account ID</label>
             <input
               id="faucet-address"
               className="faucet-address-input"
-              value={targetAddress}
-              onChange={(event) => updateAddress(event.target.value)}
-              placeholder="0x..."
+              value={targetAccount}
+              onChange={(event) => updateAccount(event.target.value)}
+              placeholder="you.testnet"
               autoComplete="off"
               spellCheck="false"
               disabled={Boolean(claiming)}
-              aria-invalid={Boolean(targetAddress && !validAddress)}
+              aria-invalid={Boolean(targetAccount && !validAccount)}
               aria-describedby="faucet-address-help"
             />
-            <p id="faucet-address-help" className={targetAddress && !validAddress ? 'faucet-field-help is-error' : 'faucet-field-help'}>
-              {targetAddress && !validAddress ? 'Invalid address. Check that it has 42 characters and starts with 0x.' : 'Use the address of the wallet you plan to connect to the dashboard.'}
+            <p id="faucet-address-help" className={targetAccount && !validAccount ? 'faucet-field-help is-error' : 'faucet-field-help'}>
+              {targetAccount && !validAccount ? 'Invalid account ID. Use lowercase letters, digits, separators, and an optional .testnet suffix.' : 'Use the account ID of the wallet you plan to connect to the dashboard.'}
             </p>
 
             {isConnected ? (
-              <p className="faucet-wallet-state"><span aria-hidden="true" /> Connected wallet: {address.slice(0, 6)}…{address.slice(-4)}</p>
+              <p className="faucet-wallet-state"><span aria-hidden="true" /> Connected wallet: {address}</p>
             ) : (
               <button
                 type="button"
                 className="faucet-secondary-button"
-                onClick={() => connectors?.[0] && connect({ connector: connectors[0] })}
-                disabled={!connectors?.length || isConnecting}
+                onClick={() => connect()}
+                disabled={!ready || isConnecting}
               >
-                {isConnecting ? 'Connecting…' : connectors?.length ? 'Connect wallet' : 'No browser wallet detected'}
+                {isConnecting ? 'Connecting…' : ready ? 'Connect NEAR wallet' : 'Loading wallets…'}
               </button>
             )}
-            {connectError && <p className="faucet-inline-error" role="alert">{connectError.shortMessage || connectError.message}</p>}
-            {wrongChain && (
-              <div className="faucet-network-warning" role="status">
-                <p>Your wallet is on a different network. Switch to {CHAIN_CONFIG.chainName} before claiming.</p>
-                <button type="button" className="faucet-secondary-button" onClick={() => switchChain({ chainId: FAUCET_CHAIN_ID })} disabled={isSwitching}>
-                  {isSwitching ? 'Switching networks…' : 'Switch to testnet'}
-                </button>
-              </div>
-            )}
-            {switchError && <p className="faucet-inline-error" role="alert">{switchError.shortMessage || switchError.message}</p>}
+            {connectError && <p className="faucet-inline-error" role="alert">{connectError.message}</p>}
 
             <div className="faucet-next-step">
               <span>NEXT STEP</span>
@@ -155,7 +151,7 @@ export function FaucetPage() {
             <div className="faucet-claim-heading">
               <div>
                 <h2 id="faucet-claim-title">Claim test mUSDC.</h2>
-                <p>Each address can claim mUSDC once per hour.</p>
+                <p>Each account can claim mUSDC once per hour.</p>
               </div>
               <span className={`faucet-service-state is-${infoState}`} role="status">
                 <span aria-hidden="true" />{infoState === 'ready' ? 'Faucet ready' : infoState === 'loading' ? 'Checking faucet' : 'Server unavailable'}
@@ -189,7 +185,7 @@ export function FaucetPage() {
                     {result && (
                       <div className={`faucet-result is-${result.type}`} role={result.type === 'error' ? 'alert' : 'status'}>
                         <p>{result.message}</p>
-                        {result.txHash && <a href={`${CHAIN_CONFIG.blockExplorer}/tx/${result.txHash}`} target="_blank" rel="noopener noreferrer">View transaction on the explorer</a>}
+                        {result.txHash && <a href={`${NEAR_CONFIG.explorerUrl}/txns/${result.txHash}`} target="_blank" rel="noopener noreferrer">View transaction on the explorer</a>}
                       </div>
                     )}
                   </article>
@@ -199,7 +195,7 @@ export function FaucetPage() {
           </section>
           </div>
         </div>
-        <p className="faucet-footer-note">This faucet is only for the HOMR simulation on {CHAIN_CONFIG.chainName}.</p>
+        <p className="faucet-footer-note">This faucet is only for the HOMR simulation on {FAUCET_NETWORK}.</p>
       </main>
     </div>
   );

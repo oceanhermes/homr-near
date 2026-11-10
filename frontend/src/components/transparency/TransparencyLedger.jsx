@@ -12,7 +12,7 @@ export function TransparencyLedger({ embedded = false }) {
       <header className="transparency-ledger__header">
         <div>
           <h2>Transparency ledger</h2>
-          <p>{`Latest 50 events in the last 2,000 blocks${fromBlock ? ` (${fromBlock} to ${toBlock})` : ''}. Older history is available on the block explorer.`}</p>
+          <p>{`Latest 50 indexed contract events${fromBlock ? ` (blocks ${fromBlock}–${toBlock})` : ''}. Finalized receipts only; demo steps are labelled as simulated.`}</p>
         </div>
         <span className="transparency-ledger__count">{events.length} events</span>
       </header>

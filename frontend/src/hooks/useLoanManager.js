@@ -1,4 +1,4 @@
-import { useAccount } from 'wagmi';
+import { useAccount } from '../context/NearWalletProvider';
 import { sameAddress } from '../contracts/protocol';
 import { useProtocolQuery, useProtocolTransaction } from './useProtocol';
 
@@ -11,7 +11,7 @@ export function useLoanManager({ borrowerOnly = false } = {}) {
     loans: borrowerOnly ? loans.filter((loan) => sameAddress(loan.borrower, address)) : loans,
     nextLoanId: query.data?.nextLoanId,
     isLoading: query.isPending, error: query.error, refresh: query.refetch, progress,
-    repayLoan: (id) => transact('repayLoan', id)
+    repayLoan: (id, amount) => transact('repayLoan', id, amount)
   };
 }
 

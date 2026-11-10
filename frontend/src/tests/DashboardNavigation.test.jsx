@@ -4,11 +4,36 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import Web3Provider from '../context/Web3Provider';
+import { NearWalletProvider } from '../context/NearWalletProvider';
 import { TransactionProvider } from '../context/TransactionContext';
 import InvestorDashboard from '../pages/InvestorDashboard';
 import BorrowerDashboard from '../pages/BorrowerDashboard';
 import AdminPanel from '../pages/AdminPanel';
+
+vi.mock('../context/NearWalletProvider', async () => {
+  const React = await import('react');
+  const value = {
+    address: 'alice.testnet',
+    accountId: 'alice.testnet',
+    isConnected: true,
+    ready: true,
+    isConnecting: false,
+    error: null,
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    signAndSendTransaction: vi.fn(),
+    selector: null,
+    modal: null,
+    network: 'testnet',
+  };
+  return {
+    NearWalletProvider: ({ children }) => React.createElement(React.Fragment, null, children),
+    useNearWallet: () => value,
+    useAccount: () => ({ address: value.address, isConnected: true, chain: { id: 'near:testnet', name: 'NEAR Protocol Testnet' } }),
+    useConnect: () => ({ connect: value.connect, connectors: [], error: null, isPending: false }),
+    useDisconnect: () => ({ disconnect: value.disconnect }),
+  };
+});
 
 vi.mock('../hooks/useProtocol', () => ({
   useProtocolQuery: () => ({ refetch: vi.fn(), isPending: false }),
@@ -32,13 +57,13 @@ afterEach(cleanup);
 
 function renderDashboard(Component) {
   return render(
-    <Web3Provider>
+    <NearWalletProvider>
       <TransactionProvider>
         <MemoryRouter>
           <Component />
         </MemoryRouter>
       </TransactionProvider>
-    </Web3Provider>
+    </NearWalletProvider>
   );
 }
 

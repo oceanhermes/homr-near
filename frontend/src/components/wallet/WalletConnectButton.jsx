@@ -1,39 +1,50 @@
-import React from 'react';
-import { useAccount, useConnect, useDisconnect, useSwitchChain } from 'wagmi';
+import React, { useState } from 'react';
+import { useNearWallet } from '../../context/NearWalletProvider';
 import { useTransactionState } from '../../context/TransactionContext';
-import { CHAIN_CONFIG } from '../../contracts/addresses';
 
+/**
+ * NEAR wallet connect button (replaces the wagmi ConnectButton).
+ * Keeps the existing `.wallet-controls` / `.wallet-account` classes so the
+ * layout and styling are unchanged.
+ */
 export function WalletConnectButton() {
   const { isTransacting } = useTransactionState();
-  const { address, isConnected, chainId } = useAccount();
-  const { connect, connectors, error, isPending } = useConnect();
-  const { switchChain, error: switchError } = useSwitchChain();
-  const { disconnect } = useDisconnect();
+  const { address, isConnected, connect, disconnect, isConnecting, ready, error } = useNearWallet();
+  const [actionError, setActionError] = useState(null);
+
+  const handleConnect = async () => {
+    setActionError(null);
+    try {
+      await connect();
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : 'Could not open the NEAR wallet selector.');
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setActionError(null);
+    try {
+      await disconnect();
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : 'Could not disconnect the wallet.');
+    }
+  };
+
+  const fatal = actionError || (error ? error.message : null);
 
   return (
     <div className="wallet-controls">
       {isConnected ? (
-        <button onClick={() => disconnect()} disabled={isTransacting} className="wallet-account">
+        <button type="button" onClick={handleDisconnect} disabled={isTransacting} className="wallet-account">
           <span className="wallet-control__dot wallet-control__dot--connected" />
           <span>{`${address.slice(0, 6)}...${address.slice(-4)}`}</span>
         </button>
       ) : (
-        <button
-          onClick={() => {
-            if (connectors && connectors.length > 0) {
-              connect({ connector: connectors[0] });
-            } else {
-              alert('No EVM wallet extension found. Install MetaMask or another compatible wallet to connect.');
-            }
-          }}
-          className="wallet-account"
-          disabled={isPending}
-        >
-          {isPending ? 'Connecting...' : 'Connect Wallet'}
+        <button type="button" onClick={handleConnect} className="wallet-account" disabled={isConnecting || !ready}>
+          {isConnecting ? 'Connecting...' : ready ? 'Connect NEAR Wallet' : 'Loading wallets...'}
         </button>
       )}
-      {isConnected && chainId !== CHAIN_CONFIG.chainId && <button type="button" className="wallet-account" onClick={() => switchChain({ chainId: CHAIN_CONFIG.chainId })}>Switch to {CHAIN_CONFIG.chainName}</button>}
-      {(error || switchError) && <span role="alert">{(error || switchError).shortMessage || (error || switchError).message}</span>}
+      {fatal && <span role="alert">{fatal}</span>}
     </div>
   );
 }

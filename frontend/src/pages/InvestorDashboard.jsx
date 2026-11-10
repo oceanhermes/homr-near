@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useAccount } from 'wagmi';
+import { useAccount } from '../context/NearWalletProvider';
 import AppLayout from '../components/layout/AppLayout';
 import {
   EmptyState,

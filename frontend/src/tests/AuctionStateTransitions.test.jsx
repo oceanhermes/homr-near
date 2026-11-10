@@ -6,13 +6,9 @@ import { MemoryRouter } from 'react-router-dom';
 import { TransactionProvider } from '../context/TransactionContext';
 import BorrowerDashboard from '../pages/BorrowerDashboard';
 
-vi.mock('wagmi', () => ({
-  useAccount: () => ({ address: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', isConnected: true }),
-  useReadContract: () => ({ data: null }),
-  useWriteContract: () => ({ writeContractAsync: vi.fn() }),
-  useConnect: () => ({ connect: vi.fn(), connectors: [] }),
-  useDisconnect: () => ({ disconnect: vi.fn() }),
-  useSwitchChain: () => ({ switchChain: vi.fn() })
+vi.mock('../context/NearWalletProvider', () => ({
+  useAccount: () => ({ address: 'borrower.testnet', isConnected: true }),
+  useNearWallet: () => ({ address: 'borrower.testnet', isConnected: true, ready: true, connect: vi.fn(), disconnect: vi.fn(), isConnecting: false, error: null })
 }));
 
 const transaction = vi.hoisted(() => vi.fn());

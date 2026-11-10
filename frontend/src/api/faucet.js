@@ -25,11 +25,11 @@ export async function fetchFaucetInfo() {
   return info;
 }
 
-export function claimFaucetToken(token, address) {
+export function claimFaucetToken(token, accountId) {
   if (token !== 'bnb' && token !== 'usdc') throw new Error('Unknown faucet token.');
   return faucetRequest(`/api/claim-${token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ address })
+    body: JSON.stringify({ accountId })
   });
 }

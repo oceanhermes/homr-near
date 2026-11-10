@@ -4,7 +4,7 @@ import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-do
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import './styles.css';
 
-import Web3Provider from './context/Web3Provider';
+import NearWalletProvider from './context/NearWalletProvider';
 import { TransactionProvider } from './context/TransactionContext';
 import InvestorDashboard from './pages/InvestorDashboard';
 import BorrowerDashboard from './pages/BorrowerDashboard';
@@ -412,7 +412,7 @@ export function App() {
               </svg>
             </a>
           </div>
-          <p className="hero-disclosure">The native {nearNetworkName} registry is {NEAR_CONFIG.contractId ? 'configured for proof lookups' : 'awaiting deployment'}. The EVM vault is a disclosed baseline.</p>
+          <p className="hero-disclosure">The native {nearNetworkName} credit contracts are {NEAR_CONFIG.contractId ? 'configured for proof lookups' : 'awaiting deployment'}. All allocation logic runs on NEAR.</p>
           <div className="hero-demo-link">
             <Link className="ghost-link" to="/demo">View the walletless demo <span aria-hidden="true">↗</span></Link>
           </div>
@@ -630,7 +630,7 @@ const rootElement = document.getElementById('root');
 if (rootElement) {
   createRoot(rootElement).render(
     <React.StrictMode>
-      <Web3Provider>
+      <NearWalletProvider>
         <TransactionProvider>
           <BrowserRouter>
             <Routes>
@@ -643,7 +643,7 @@ if (rootElement) {
             </Routes>
           </BrowserRouter>
         </TransactionProvider>
-      </Web3Provider>
+      </NearWalletProvider>
     </React.StrictMode>,
   );
 }

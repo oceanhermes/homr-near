@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useAccount } from 'wagmi';
+import { useAccount } from '../context/NearWalletProvider';
 import AppLayout from '../components/layout/AppLayout';
 import {
   EmptyState,
@@ -91,7 +91,7 @@ export function BorrowerDashboard() {
     fetchApplications().then((response) => {
       if (!Array.isArray(response?.applications)) throw new Error('Invalid application history response');
       const items = response.applications
-        .filter((application) => application.applicant?.walletAddress?.toLowerCase() === applicationWallet)
+        .filter((application) => application.applicant?.accountId?.toLowerCase() === applicationWallet)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       if (!cancelled) setApplicationHistory({ wallet: applicationWallet, items, status: 'ready' });
     }).catch((error) => {
@@ -130,7 +130,7 @@ export function BorrowerDashboard() {
         if (!address) throw new Error('Connect your borrower wallet before applying.');
         if (decimals === undefined) throw new Error('Wait for the token configuration to load.');
         return createApplication({
-        walletAddress: address,
+        accountId: address,
         displayName: appName,
         propertyHash: appProperty,
         requestedAmount: parseAmount(appAmount, 6).toString(),
@@ -153,7 +153,7 @@ export function BorrowerDashboard() {
       async () => {
         const input = { amount: bidAmount, rate: bidRate, term: bidTerm, salt: bidSalt };
         if (bidStorageKey) {
-          const { hash } = bidValues(input, decimals, address);
+          const { hash } = await bidValues(input, decimals, address);
           try {
             const previous = JSON.parse(localStorage.getItem(bidStorageKey) || '{}');
             localStorage.setItem(bidStorageKey, JSON.stringify({
