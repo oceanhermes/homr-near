@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAccount } from '../context/NearWalletProvider';
 import AppLayout from '../components/layout/AppLayout';
 import {
@@ -46,7 +46,20 @@ export function InvestorDashboard() {
   const [statusMsg, setStatusMsg] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const { address } = useAccount();
+  // Wallet changes only reset the form notice; the contract reads live in the
+  // query hooks, so there is no data-fetch effect to loop on state here.
   useEffect(() => { setStatusMsg(null); }, [address]);
+
+  const vaultError = error;
+  const loanError = loansError;
+
+  // Stable callback: ChainStatus receives it as a prop, and a fresh function on
+  // every render is what turns a refresh-on-render into a fetch loop.
+  const refreshAll = useCallback(() => {
+    setStatusMsg(null);
+    refresh();
+    refreshLoans();
+  }, [refresh, refreshLoans]);
 
   const handleDepositSubmit = async (event) => {
     event.preventDefault();
@@ -91,7 +104,10 @@ export function InvestorDashboard() {
   const activeLoans = loans.filter((loan) => loan.isActive);
   const hasPosition = parseFloat(String(userShares).replace(/,/g, '')) > 0;
   const money = (value) => /^\d/.test(String(value)) ? `$${value}` : value;
-  const loanDataUnavailable = loansLoading || Boolean(loansError);
+  const loanDataUnavailable = loansLoading || Boolean(loanError);
+  const loanUnavailableText = loanError
+    ? 'Loan data unavailable. The contract read failed, so this list is not being polled again.'
+    : 'Waiting for loan data.';
 
   return (
     <AppLayout
@@ -102,7 +118,7 @@ export function InvestorDashboard() {
       workflowLabel={hasPosition ? 'Capital deployed' : 'Ready to fund'}
       workflowDetail={hasPosition ? 'Monitor active loans and repayment activity.' : 'Deposit mUSDC to mint your first vault shares.'}
     >
-      <ChainStatus loading={isLoading || loansLoading} error={error || loansError} refresh={() => { refresh(); refreshLoans(); }} progress={progress} />
+      <ChainStatus loading={isLoading || loansLoading} error={vaultError || loanError} refresh={refreshAll} progress={progress} />
       {activeSection === 'overview' && (
         <>
           <PageIntro
@@ -121,7 +137,7 @@ export function InvestorDashboard() {
 
           <div className="dashboard-split dashboard-split--wide">
             <Panel title="Active portfolio" description="The loans currently carrying deployed vault capital." chipType="onchain">
-              {loanDataUnavailable ? <p>Waiting for loan data.</p> : activeLoans.length === 0 ? (
+              {loanDataUnavailable ? <p>{loanUnavailableText}</p> : activeLoans.length === 0 ? (
                 <EmptyState title="No active investments" detail="Funded loans will appear after an auction is finalized." />
               ) : (
                 <div className="dashboard-row-list">
@@ -205,7 +221,7 @@ export function InvestorDashboard() {
             chipType="onchain"
           />
           <Panel title="Funded loan portfolio" description="Active principal, rate, term, and maturity status.">
-            {loanDataUnavailable ? <p>Waiting for loan data.</p> : activeLoans.length === 0 ? (
+            {loanDataUnavailable ? <p>{loanUnavailableText}</p> : activeLoans.length === 0 ? (
               <EmptyState title="No active investments" detail="Funded loans will appear here after an auction is finalized." />
             ) : (
               <div className="dashboard-row-list">

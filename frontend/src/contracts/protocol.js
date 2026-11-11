@@ -53,7 +53,16 @@ export function auctionPhase(state, revealDeadline, nowMs = Date.now()) {
 
 const view = (contract, method, args = {}) => callNearView(method, args, contract);
 
+/** `ft_metadata` never changes for a deployed token; cache it instead of asking on every poll. */
+const METADATA_TTL_MS = 60000;
+/** Ceiling on per-poll `get_loan` reads, so a long-lived contract cannot burst the RPC. */
+const MAX_LOAN_LOOKUPS = 50;
+
+let metadataCache = { value: null, expiresAt: 0 };
+
 async function metadata() {
+  if (metadataCache.value && metadataCache.expiresAt > Date.now()) return metadataCache.value;
+
   let decimals = TOKEN_DECIMALS;
   try {
     const meta = await view(CONTRACT_ADDRESSES.MockUSDC, 'ft_metadata');
@@ -61,7 +70,10 @@ async function metadata() {
   } catch {
     // The mock token has no ft_metadata view: mUSDC is 6 decimals by design.
   }
-  return { decimals, shareDecimals: SHARE_DECIMALS };
+
+  const value = { decimals, shareDecimals: SHARE_DECIMALS };
+  metadataCache = { value, expiresAt: Date.now() + METADATA_TTL_MS };
+  return value;
 }
 
 /** Contract storage does not accrue interest on-chain: NAV is principal-backed. */
@@ -120,10 +132,11 @@ async function loanRecord(id, decimals) {
 async function loans() {
   const { decimals } = await metadata();
   const next = Number(await view(CONTRACT_ADDRESSES.LoanManager, 'get_next_loan_id') || 0);
-  const ids = Array.from({ length: next }, (_, index) => index);
+  // Newest ids only: every extra id would be another RPC call on each poll.
+  const ids = Array.from({ length: Math.min(next, MAX_LOAN_LOOKUPS) }, (_, index) => next - 1 - index);
   const records = await Promise.all(ids.map((id) => loanRecord(id, decimals).catch(() => null)));
   return {
-    loans: records.filter(Boolean),
+    loans: records.filter(Boolean).reverse(),
     nextLoanId: String(next),
   };
 }

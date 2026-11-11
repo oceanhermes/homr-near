@@ -1,14 +1,17 @@
 export const NEAR_CONFIG = {
-  networkId: import.meta.env.VITE_NEAR_NETWORK_ID || 'testnet',
-  rpcUrl: import.meta.env.VITE_NEAR_RPC_URL || 'https://archival-rpc.testnet.near.org',
-  nodeUrl: import.meta.env.VITE_NEAR_NODE_URL || 'https://rpc.testnet.near.org',
-  contractId: import.meta.env.VITE_NEAR_CONTRACT_ID || import.meta.env.VITE_AUDIT_CONTRACT || 'audit.homr.testnet',
-  vaultContractId: import.meta.env.VITE_VAULT_CONTRACT || 'vault.homr.testnet',
-  auctionContractId: import.meta.env.VITE_AUCTION_CONTRACT || 'auction.homr.testnet',
-  loanManagerContractId: import.meta.env.VITE_LOAN_MANAGER_CONTRACT || 'loan-manager.homr.testnet',
-  auditContractId: import.meta.env.VITE_AUDIT_CONTRACT || 'audit.homr.testnet',
-  tokenContractId: import.meta.env.VITE_TOKEN_CONTRACT || 'token.homr.testnet',
-  explorerUrl: import.meta.env.VITE_NEAR_EXPLORER_URL || 'https://testnet.nearblocks.io',
+  networkId: 'testnet',
+
+  // PASTIKAN MENGGUNAKAN URL INI (FastNEAR)
+  rpcUrl: 'https://test.rpc.fastnear.com',
+  nodeUrl: 'https://test.rpc.fastnear.com',
+
+  contractId: 'audit.funnylace8065.testnet',
+  vaultContractId: 'housing-vault.funnylace8065.testnet',
+  auctionContractId: 'credit-auction.funnylace8065.testnet',
+  loanManagerContractId: 'loan-manager.funnylace8065.testnet',
+  auditContractId: 'audit.funnylace8065.testnet',
+  tokenContractId: 'mock-token.funnylace8065.testnet',
+  explorerUrl: 'https://testnet.nearblocks.io',
 };
 
 export const CHAIN_CONFIG = {

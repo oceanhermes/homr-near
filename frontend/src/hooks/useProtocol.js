@@ -11,15 +11,80 @@ export const protocolKey = [
   ...Object.values(CONTRACT_ADDRESSES),
 ];
 
+const REFRESH_INTERVAL_MS = 10000;
+const LEDGER_REFRESH_INTERVAL_MS = 30000;
+const MAX_RETRIES = 1;
+
+const RESOURCE_LABEL = {
+  vault: 'vault data',
+  loans: 'loan data',
+  auction: 'auction data',
+  recentEvents: 'the event ledger',
+};
+
+/**
+ * Turns a transport failure into a message the UI can show as-is.
+ * `error.code` comes from `NearRpcError` in `near/rpc.js`.
+ */
+export function describeProtocolError(resource, error) {
+  const label = RESOURCE_LABEL[resource] || 'contract data';
+  const detail = error?.message || 'Unknown error';
+  if (error?.code === 'CONTRACT_UNAVAILABLE') {
+    return `Failed to load ${label}. The contract is not deployed on NEAR ${NEAR_CONFIG.networkId} yet. (${detail})`;
+  }
+  if (error?.code === 'RATE_LIMITED') {
+    return `Failed to load ${label}. The NEAR RPC is rate limiting reads, so polling is paused. Press retry in a moment. (${detail})`;
+  }
+  return `Failed to load ${label}. ${detail}`;
+}
+
+/**
+ * Retrying a rate-limited or undeployed contract read only deepens the
+ * problem: the breaker already failed it fast, so let the query settle into
+ * its error state and wait for an explicit user retry.
+ */
+function shouldRetry(failureCount, error) {
+  if (error?.code === 'RATE_LIMITED' || error?.code === 'CONTRACT_UNAVAILABLE') return false;
+  if (/rate limit|too many requests|429/i.test(error?.message || '')) return false;
+  return failureCount < MAX_RETRIES;
+}
+
+function toProtocolError(resource, error) {
+  const wrapped = new Error(describeProtocolError(resource, error));
+  wrapped.code = error?.code || 'RPC_FAILED';
+  wrapped.cause = error;
+  return wrapped;
+}
+
 export function useProtocolQuery(resource, personal = false) {
   const { accountId } = useNearWallet();
   const protocol = useMemo(() => createProtocol(accountId, null), [accountId]);
+  const interval = resource === 'recentEvents' ? LEDGER_REFRESH_INTERVAL_MS : REFRESH_INTERVAL_MS;
+
   return useQuery({
     queryKey: [...protocolKey, resource, personal ? accountId || null : null],
-    queryFn: () => protocol[resource](personal ? accountId : undefined),
+    queryFn: async () => {
+      try {
+        return await protocol[resource](personal ? accountId : undefined);
+      } catch (error) {
+        throw toProtocolError(resource, error);
+      }
+    },
     staleTime: 5000,
-    refetchInterval: resource === 'recentEvents' ? 30000 : 10000,
-    retry: 1,
+    // Poll only while healthy. Once a read fails the interval stops, so a 429
+    // or a missing contract cannot turn into an endless refetch loop; the
+    // Retry button calls `refetch()` and re-arms polling on success.
+    refetchInterval: (query) => (query.state.status === 'error' ? false : interval),
+    refetchOnWindowFocus: false,
+    // Without this, React Query parks the retry in `fetchStatus: 'paused'`
+    // while the tab is in the background, which leaves the dashboard on its
+    // loading skeleton forever instead of showing the error.
+    networkMode: 'always',
+    retry: shouldRetry,
+    // A query that already failed must not refetch just because the component
+    // remounted — that is how a failing read becomes a request storm.
+    retryOnMount: false,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   });
 }
 

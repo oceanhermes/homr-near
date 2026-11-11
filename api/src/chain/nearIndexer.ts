@@ -15,30 +15,15 @@ export type { Nep297Event };
 
 export type TxSource = "ONCHAIN" | "SIMULATION";
 
-/** Everything the indexer (or demo fallback) knows about where an event came from. */
 export interface EventContext {
-    /** NEAR transaction hash (base58). */
     txHash: string;
-    /** NEAR receipt id (base58) — the idempotency key. */
     receiptId: string;
-    /** Position of this log within the receipt (a receipt can emit several events). */
     logIndex: number;
     blockHeight: bigint;
-    /** Signer/predecessor of the receipt. */
     predecessorId: string;
     txSource: TxSource;
 }
 
-/**
- * Persist a parsed NEP-297 event and sync the business entities it describes.
- *
- * C3 (idempotency): every write is keyed so that re-processing the same block
- * (e.g. after a reorg replay) is a no-op:
- *  - ChainEvent → upsert on @@unique([receiptId, logIndex])
- *                 (the Prisma equivalent of ON CONFLICT (receiptId, logIndex) DO NOTHING)
- *  - Loan       → upsert on onchainLoanId
- *  - Repayment  → upsert on @@unique receiptId
- */
 export async function processEvent(event: Nep297Event, ctx: EventContext): Promise<void> {
     await prisma.chainEvent.upsert({
         where: {
@@ -137,39 +122,20 @@ async function rpcCall<T>(method: string, params: Record<string, unknown>): Prom
     return body.result;
 }
 
-interface RpcBlockHeader {
-    height: number;
-    hash: string;
-}
-
-interface RpcBlock {
-    header: RpcBlockHeader;
-    chunks: { chunk_hash: string; shard_id: number }[];
-}
-
-interface RpcChunk {
-    transactions: { hash: string; signer_id: string; receiver_id: string }[];
-}
-
+interface RpcBlockHeader { height: number; hash: string; }
+interface RpcBlock { header: RpcBlockHeader; chunks: { chunk_hash: string; shard_id: number }[]; }
+interface RpcChunk { transactions: { hash: string; signer_id: string; receiver_id: string }[]; }
 interface RpcTxOutcome {
     transaction: { hash: string; signer_id: string; receiver_id: string };
     receipts: { receipt_id: string; predecessor_id: string; receiver_id: string }[];
     receipts_outcome: { id: string; block_hash: string; outcome: { logs: string[] } }[];
 }
 
-/** Height of the latest block with finality == "final". */
 async function getFinalBlockHeight(): Promise<bigint> {
     const block = await rpcCall<RpcBlock>("block", { finality: "final" });
     return BigInt(block.header.height);
 }
 
-/**
- * Process a single block: fetch it, walk every chunk → transaction → receipt
- * outcome, and index every NEP-297 `EVENT_JSON:` log.
- *
- * B8 finality: the caller only invokes this for heights that are already final
- * (height <= finalTip - FINALITY_LAG), so reorged blocks are never processed.
- */
 async function processBlock(blockHeight: bigint): Promise<number> {
     const block = await rpcCall<RpcBlock>("block", { block_id: Number(blockHeight) });
     let eventsSeen = 0;
@@ -178,10 +144,18 @@ async function processBlock(blockHeight: bigint): Promise<number> {
         const chunk = await rpcCall<RpcChunk>("chunk", { chunk_id: chunkMeta.chunk_hash });
 
         for (const tx of chunk.transactions) {
-            const outcome = await rpcCall<RpcTxOutcome>("tx", {
-                tx_hash: tx.hash,
-                sender_id: tx.signer_id,
-            });
+            let outcome: RpcTxOutcome;
+            try {
+                // Gunakan EXPERIMENTAL_tx_status yang lebih stabil untuk live blocks
+                outcome = await rpcCall<RpcTxOutcome>("EXPERIMENTAL_tx_status", {
+                    tx_hash: tx.hash,
+                    sender_account_id: tx.signer_id,
+                });
+            } catch (err) {
+                // Jika 1 transaksi gagal dibaca, lewati saja jangan sampai menghentikan seluruh block
+                logger.warn(`NEAR Indexer: skipped tx ${tx.hash}`, { error: String(err) });
+                continue;
+            }
 
             const predecessorById = new Map(
                 outcome.receipts.map((r) => [r.receipt_id, r.predecessor_id])
@@ -229,27 +203,24 @@ async function setCursor(blockHeight: bigint): Promise<void> {
     });
 }
 
-export async function startIndexer(): Promise<void> {
-    logger.info(
-        `NEAR Indexer starting (node=${config.NEAR_NODE_URL}, finality lag=${config.FINALITY_LAG} blocks)`
-    );
+// Helper untuk memberi jeda waktu (delay)
+const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
-    const MAX_BLOCKS_PER_TICK = 20;
+export async function startIndexer(): Promise<void> {
+    logger.info(`NEAR Indexer starting (node=${config.NEAR_NODE_URL}, finality lag=${config.FINALITY_LAG} blocks)`);
+
+    const MAX_BLOCKS_PER_TICK = 2;
     let ticking = false;
 
     const tick = async () => {
-        if (ticking) return; // never overlap ticks
+        if (ticking) return;
         ticking = true;
         try {
-            // Anchor on the latest FINAL block, then lag a few blocks behind it
-            // so we only ever process heights that cannot be reorged away.
             const finalTip = await getFinalBlockHeight();
             const maxHeight = finalTip - BigInt(config.FINALITY_LAG);
 
             let cursor = await getCursor();
             if (cursor === null) {
-                // First run: start from the (already final) lagged tip instead of
-                // replaying the entire chain history.
                 cursor = maxHeight;
                 await setCursor(maxHeight);
                 logger.info(`NEAR Indexer: no cursor, starting at final height ${maxHeight}`);
@@ -265,15 +236,21 @@ export async function startIndexer(): Promise<void> {
                     }
                     await setCursor(height);
                 } catch (err) {
-                    // Do not advance the cursor: retry this block on the next tick.
-                    logger.error(`NEAR Indexer: failed to process block ${height}`, err);
+                    logger.error(`NEAR Indexer: failed to process block ${height}`, {
+                        error: err instanceof Error ? err.message : String(err)
+                    });
                     break;
                 }
                 height += 1n;
                 processed++;
+
+                // Jeda 1 detik agar tidak terkena HTTP 429 (Rate Limit)
+                await delay(1000);
             }
         } catch (err) {
-            logger.error("NEAR Indexer tick failed", err);
+            logger.error("NEAR Indexer tick failed", {
+                error: err instanceof Error ? err.message : String(err)
+            });
         } finally {
             ticking = false;
         }
