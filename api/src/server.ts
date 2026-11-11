@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import Fastify from "fastify";
 import helmet from "@fastify/helmet";
 import { config } from "./config.js";
@@ -6,6 +7,7 @@ import { healthRoutes } from "./routes/health.js";
 import { publicRoutes } from "./routes/public.js";
 import { adminRoutes } from "./routes/admin.js";
 import { demoRoutes } from "./routes/demo.js";
+import faucetRoutes from './routes/faucet.js';
 import { applicationRoutes } from "./modules/applications/routes.js";
 import { auctionRoutes } from "./modules/auctions/routes.js";
 import { startIndexer } from "./chain/nearIndexer.js";
@@ -28,6 +30,10 @@ await app.register(applicationRoutes, { prefix: "/api" });
 await app.register(auctionRoutes, { prefix: "/api" });
 await app.register(adminRoutes, { prefix: "/api/admin" });
 await app.register(demoRoutes, { prefix: "/api" });
+// Served at /api/info + /api/claim-usdc, and mirrored under /faucet/api/* for
+// deployments whose faucet base URL points at the /faucet prefix.
+await app.register(faucetRoutes, { prefix: "/api" });
+await app.register(faucetRoutes, { prefix: "/faucet" });
 
 startIndexer().catch((err) => logger.error("NEAR Indexer crashed", err));
 

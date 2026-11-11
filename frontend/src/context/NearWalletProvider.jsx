@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { setupWalletSelector } from '@near-wallet-selector/core';
 import { setupMyNearWallet } from '@near-wallet-selector/my-near-wallet';
 import { setupHereWallet } from '@near-wallet-selector/here-wallet';
+import { setupMeteorWallet } from '@near-wallet-selector/meteor-wallet';
 import { setupModal } from '@near-wallet-selector/modal-ui';
 import '@near-wallet-selector/modal-ui/styles.css';
 import { CHAIN_CONFIG, NEAR_CONFIG } from '../contracts/addresses';
@@ -33,8 +34,8 @@ export const NearWalletContext = createContext({
   error: null,
   selector: null,
   modal: null,
-  connect: () => {},
-  disconnect: () => {},
+  connect: () => { },
+  disconnect: () => { },
   signAndSendTransaction: async () => {
     throw new Error('NEAR wallet is not ready yet.');
   },
@@ -88,7 +89,11 @@ export function NearWalletProvider({ children }) {
         const instance = await setupWalletSelector({
           network: NEAR_CONFIG.networkId,
           debug: false,
-          modules: [setupMyNearWallet(), setupHereWallet()],
+          modules: [
+            setupMyNearWallet(),
+            setupHereWallet(),
+            setupMeteorWallet()
+          ],
         });
         if (cancelled) return;
 

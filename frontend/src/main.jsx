@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
@@ -175,31 +175,63 @@ function useSafeNavigate() {
 }
 
 /**
+ * Live landing-page panels.
+ *
+ * These read the indexer API, but the page mounts each panel twice (hero
+ * preview + transparency section) and React StrictMode runs mount effects
+ * twice, so a plain `useEffect(() => load(), [])` fired the same request four
+ * times per visit. `loadOnce` collapses those callers onto one in-flight
+ * promise; a failed read settles into `status === 'error'` and stops there
+ * until the user presses "Try again".
+ */
+const inFlightLive = new Map();
+
+function loadOnce(key, run) {
+  const pending = inFlightLive.get(key);
+  if (pending) return pending;
+  const request = run().finally(() => inFlightLive.delete(key));
+  inFlightLive.set(key, request);
+  return request;
+}
+
+function describeLiveError(resource, error) {
+  const detail = error?.message || 'Unknown error';
+  if (/429|rate limit|too many requests/i.test(detail)) {
+    return `Failed to load ${resource}. The data service is rate limiting requests, so loading stopped instead of retrying in a loop. Try again in a moment. (${detail})`;
+  }
+  return `Failed to load ${resource}. Please check that the contracts are deployed and the indexer API is reachable. (${detail})`;
+}
+
+function useLiveResource(key, loader, resource) {
+  const [state, setState] = useState({ status: 'loading', data: null, error: null });
+
+  const load = useCallback(() => {
+    setState((previous) => ({ status: 'loading', data: previous.data, error: null }));
+    return loadOnce(key, loader).then(
+      (data) => setState({ status: 'ok', data, error: null }),
+      (error) => setState({ status: 'error', data: null, error: describeLiveError(resource, error) }),
+    );
+  }, [key, loader, resource]);
+
+  // `load` is stable (constant key + module-level loader), so this runs once on
+  // mount and never re-fires because of a state update it performed itself.
+  useEffect(() => { load(); }, [load]);
+
+  return { ...state, reload: load };
+}
+
+const formatUsdc = (value) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? (amount / 1e6).toFixed(2) : '—';
+};
+
+/**
  * LiveVaultPanel
  * Baca state vault langsung dari backend dan kontrak testnet.
  * Data vault dibaca dari API yang terhubung ke kontrak testnet.
  */
 function LiveVaultPanel() {
-  const [vault, setVault] = useState(null);
-  const [status, setStatus] = useState('idle'); // idle | loading | ok | error
-  const [errorMsg, setErrorMsg] = useState(null);
-
-  const load = async () => {
-    setStatus('loading');
-    setErrorMsg(null);
-    try {
-      const data = await fetchVault();
-      setVault(data);
-      setStatus('ok');
-    } catch (err) {
-      setErrorMsg(err.message || 'Unknown error');
-      setStatus('error');
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
+  const { status, data: vault, error, reload } = useLiveResource('vault', fetchVault, 'vault data');
 
   return (
     <div className="live-panel">
@@ -209,10 +241,9 @@ function LiveVaultPanel() {
           <span className="live-panel-sublabel">{networkName} · read-only</span>
         </div>
         <span className={`state-chip state-chip--${status === 'ok' ? 'onchain' : status === 'error' ? 'error' : 'offchain'}`}>
-          {status === 'idle' && 'LOADING'}
-          {status === 'loading' && 'LOADING'}
           {status === 'ok' && 'LIVE ONCHAIN'}
           {status === 'error' && 'ERROR'}
+          {status !== 'ok' && status !== 'error' && 'LOADING'}
         </span>
       </header>
 
@@ -220,22 +251,22 @@ function LiveVaultPanel() {
         <div className="live-panel-stats">
           <div className="live-stat">
             <span className="live-stat-label">Total Assets</span>
-            <span className="live-stat-value">{(Number(vault.totalAssets) / 1e6).toFixed(2)}</span>
+            <span className="live-stat-value">{formatUsdc(vault.totalAssets)}</span>
             <span className="live-stat-unit">mock USDC</span>
           </div>
           <div className="live-stat">
             <span className="live-stat-label">Available</span>
-            <span className="live-stat-value">{(Number(vault.availableCapital) / 1e6).toFixed(2)}</span>
+            <span className="live-stat-value">{formatUsdc(vault.availableCapital)}</span>
             <span className="live-stat-unit">mock USDC</span>
           </div>
           <div className="live-stat">
             <span className="live-stat-label">Deployed</span>
-            <span className="live-stat-value">{(Number(vault.deployedCapital) / 1e6).toFixed(2)}</span>
+            <span className="live-stat-value">{formatUsdc(vault.deployedCapital)}</span>
             <span className="live-stat-unit">mock USDC</span>
           </div>
           <div className="live-stat">
             <span className="live-stat-label">Total Shares</span>
-            <span className="live-stat-value">{vault.totalShares}</span>
+            <span className="live-stat-value">{vault.totalShares ?? '—'}</span>
             <span className="live-stat-unit">hvSHARE</span>
           </div>
         </div>
@@ -243,8 +274,8 @@ function LiveVaultPanel() {
 
       {status === 'error' && (
         <div className="live-panel-error">
-          <p>Could not load data from the server: {errorMsg}</p>
-          <button type="button" className="live-panel-retry" onClick={load}>
+          <p>{error}</p>
+          <button type="button" className="live-panel-retry" onClick={reload}>
             Try again
           </button>
         </div>
@@ -253,7 +284,9 @@ function LiveVaultPanel() {
       {status === 'ok' && vault && (
         <footer className="live-panel-footer">
           <span className="live-panel-address">
-            {vault.vaultAddress.slice(0, 6)}…{vault.vaultAddress.slice(-4)}
+            {vault?.vaultAddress
+              ? `${vault.vaultAddress.slice(0, 6)}…${vault.vaultAddress.slice(-4)}`
+              : "Unknown Address"}
           </span>
           <a
             className="live-panel-link"
@@ -274,21 +307,23 @@ function LiveVaultPanel() {
  * List loan dari backend. Kalau kosong, tampilkan pesan jujur.
  */
 function LiveLoansPanel() {
-  const [loans, setLoans] = useState(null);
-  const [status, setStatus] = useState('loading');
+  const { status, data, error, reload } = useLiveResource('loans', fetchLoans, 'loan data');
+  const loans = data?.loans || [];
 
-  useEffect(() => {
-    fetchLoans()
-      .then((data) => {
-        setLoans(data.loans || []);
-        setStatus('ok');
-      })
-      .catch(() => setStatus('error'));
-  }, []);
+  if (status === 'error') {
+    return (
+      <div className="live-panel-error">
+        <p>{error}</p>
+        <button type="button" className="live-panel-retry" onClick={reload}>
+          Try again
+        </button>
+      </div>
+    );
+  }
 
-  if (status === 'loading') return <p className="live-empty">Loading loans…</p>;
-  if (status === 'error') return <p className="live-empty live-empty--error">Could not load loans.</p>;
-  if (!loans || loans.length === 0) {
+  if (status !== 'ok') return <p className="live-empty">Loading loans…</p>;
+
+  if (loans.length === 0) {
     return (
       <p className="live-empty">
         No active loans yet. Loans will appear once an auction is finalized.
@@ -302,7 +337,7 @@ function LiveLoansPanel() {
         <li key={loan.id} className="live-loan-row">
           <span className="live-loan-id">#{loan.onchainLoanId}</span>
           <span className="live-loan-principal">
-            {(Number(loan.principal) / 1e6).toFixed(2)} USDC
+            {formatUsdc(loan.principal)} USDC
           </span>
           <span className="live-loan-rate">{loan.rate} bps</span>
           <span className={`state-chip state-chip--${loan.status === 'ACTIVE' ? 'onchain' : 'offchain'}`}>
@@ -544,82 +579,82 @@ export function App() {
       </footer>
 
       <AnimatePresence>
-      {dialogOpen && (
-        <motion.div
-          className="dialog-backdrop"
-          role="presentation"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: reducedMotion ? 0 : 0.18 }}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setDialogOpen(false);
-          }}
-        >
+        {dialogOpen && (
           <motion.div
-            className="journey-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dialog-title"
-            initial={{ opacity: 0, y: reducedMotion ? 0 : 10, scale: reducedMotion ? 1 : 0.985 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: reducedMotion ? 0 : 6, scale: reducedMotion ? 1 : 0.99 }}
-            transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className="dialog-backdrop"
+            role="presentation"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reducedMotion ? 0 : 0.18 }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setDialogOpen(false);
+            }}
           >
-            <div className="dialog-header">
-              <p className="section-eyebrow">CHOOSE YOUR DASHBOARD</p>
-              <button
-                className="dialog-close"
-                type="button"
-                aria-label="Close dashboard selection"
-                onClick={() => setDialogOpen(false)}
-              >
-                <span aria-hidden="true">×</span>
-              </button>
-            </div>
-            <h2 id="dialog-title" className="dialog-title">
-              How would you like to experience HOMR?
-            </h2>
-            <div className="dialog-options">
-              <button
-                type="button"
-                className="dialog-option"
-                onClick={() => chooseJourney('investor')}
-              >
-                <span className="dialog-option-label">Investor</span>
-                <span className="dialog-option-detail">Deposit and monitor the vault</span>
-                <span className="dialog-option-arrow" aria-hidden="true">›</span>
-              </button>
+            <motion.div
+              className="journey-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="dialog-title"
+              initial={{ opacity: 0, y: reducedMotion ? 0 : 10, scale: reducedMotion ? 1 : 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: reducedMotion ? 0 : 6, scale: reducedMotion ? 1 : 0.99 }}
+              transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="dialog-header">
+                <p className="section-eyebrow">CHOOSE YOUR DASHBOARD</p>
+                <button
+                  className="dialog-close"
+                  type="button"
+                  aria-label="Close dashboard selection"
+                  onClick={() => setDialogOpen(false)}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </div>
+              <h2 id="dialog-title" className="dialog-title">
+                How would you like to experience HOMR?
+              </h2>
+              <div className="dialog-options">
+                <button
+                  type="button"
+                  className="dialog-option"
+                  onClick={() => chooseJourney('investor')}
+                >
+                  <span className="dialog-option-label">Investor</span>
+                  <span className="dialog-option-detail">Deposit and monitor the vault</span>
+                  <span className="dialog-option-arrow" aria-hidden="true">›</span>
+                </button>
 
-              <button
-                type="button"
-                className="dialog-option"
-                onClick={() => chooseJourney('borrower')}
-              >
-                <span className="dialog-option-label">Borrower</span>
-                <span className="dialog-option-detail">Commit and reveal your bid</span>
-                <span className="dialog-option-arrow" aria-hidden="true">›</span>
-              </button>
+                <button
+                  type="button"
+                  className="dialog-option"
+                  onClick={() => chooseJourney('borrower')}
+                >
+                  <span className="dialog-option-label">Borrower</span>
+                  <span className="dialog-option-detail">Commit and reveal your bid</span>
+                  <span className="dialog-option-arrow" aria-hidden="true">›</span>
+                </button>
 
-              <button
-                type="button"
-                className="dialog-option"
-                onClick={() => chooseJourney('admin')}
-              >
-                <span className="dialog-option-label">Credit Manager / Admin</span>
-                <span className="dialog-option-detail">Underwrite & manage auctions</span>
-                <span className="dialog-option-arrow" aria-hidden="true">›</span>
-              </button>
-            </div>
-            <p className="dialog-fineprint">
-              View live testnet data. Connect your wallet to submit applications and transactions.
-              <span className="dialog-hint">
-                Press <Kbd>ESC</Kbd> to close.
-              </span>
-            </p>
+                <button
+                  type="button"
+                  className="dialog-option"
+                  onClick={() => chooseJourney('admin')}
+                >
+                  <span className="dialog-option-label">Credit Manager / Admin</span>
+                  <span className="dialog-option-detail">Underwrite & manage auctions</span>
+                  <span className="dialog-option-arrow" aria-hidden="true">›</span>
+                </button>
+              </div>
+              <p className="dialog-fineprint">
+                View live testnet data. Connect your wallet to submit applications and transactions.
+                <span className="dialog-hint">
+                  Press <Kbd>ESC</Kbd> to close.
+                </span>
+              </p>
+            </motion.div>
           </motion.div>
-        </motion.div>
-      )}
+        )}
       </AnimatePresence>
     </div>
   );

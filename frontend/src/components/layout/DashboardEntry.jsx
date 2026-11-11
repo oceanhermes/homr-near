@@ -9,9 +9,13 @@ const dashboardData = {
 
 export default function DashboardEntry({ role, children }) {
   const { resource, personal, title, detail } = dashboardData[role];
-  const { isPending } = useProtocolQuery(resource, personal);
+  const { isPending, error } = useProtocolQuery(resource, personal);
 
-  if (!isPending) return children;
+  // Render the dashboard as soon as the first read settles — including when it
+  // fails. Gating on `isPending` alone unmounts the page on every refetch of a
+  // failed query (it flips back to `pending`), which remounts the dashboard,
+  // refetches immediately, and turns one bad read into an endless RPC loop.
+  if (error || !isPending) return children;
 
   return (
     <main className="dashboard-entry" aria-busy="true">

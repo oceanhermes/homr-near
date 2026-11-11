@@ -13,7 +13,10 @@ export const API_BASE = serviceBase(
   'http://localhost:4000', 'https://api.homr.web.id',
 );
 
+// The faucet is part of the HOMR API (`/api/info`, `/api/claim-usdc`); the API
+// also mirrors those routes under `/faucet/api/*`, so an older
+// `VITE_FAUCET_API_BASE=https://host/faucet` keeps working.
 export const FAUCET_API_BASE = serviceBase(
   import.meta.env.VITE_FAUCET_API_BASE, import.meta.env.DEV,
-  'http://localhost:3001', 'https://api.homr.web.id/faucet',
+  API_BASE, API_BASE,
 );

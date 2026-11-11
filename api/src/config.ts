@@ -23,7 +23,9 @@ const schema = z.object({
     // Admin Credentials
     ADMIN_ACCOUNT_ID: z.string().default("admin.homr.testnet"),
     ADMIN_ACCOUNT_IDS: z.string().default(""), // comma-separated allowlist; falls back to ADMIN_ACCOUNT_ID
-    ADMIN_PRIVATE_KEY: z.string().default("ed25519:3D5NzVDzVbZ1F7bZ1F7bZ1F7bZ1F7bZ1F7bZ1F7bZ1F7"),
+    ADMIN_PRIVATE_KEY: z.string().optional(),
+    // Deployment envs use NEAR_PRIVATE_KEY for the admin signer; accept it as a fallback.
+    NEAR_PRIVATE_KEY: z.string().optional(),
     ADMIN_API_KEY: z.string().min(8).default("homr_admin_secret_key_2026"),
     // NEP-413 `recipient` for admin signature challenges
     NEP413_RECIPIENT: z.string().default("homr-api"),
@@ -48,6 +50,10 @@ if (!parsed.success) {
 export const config = {
     ...parsed.data,
     isProd: parsed.data.NODE_ENV === "production",
+    // The admin signer never falls back to a placeholder key: a missing key must
+    // surface as a signing error instead of a simulated transaction. Empty
+    // values count as missing so `ADMIN_PRIVATE_KEY=` cannot shadow a real key.
+    ADMIN_PRIVATE_KEY: (parsed.data.ADMIN_PRIVATE_KEY ?? "").trim() || (parsed.data.NEAR_PRIVATE_KEY ?? "").trim(),
     contracts: {
         vault: parsed.data.VAULT_CONTRACT,
         auction: parsed.data.AUCTION_CONTRACT,
